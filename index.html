@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>گوربا بتمن</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="login" class="screen">
+  <div class="card">
+    <div class="bat">🦇</div>
+    <h1>گوربا بتمن</h1>
+    <p>پیام‌رسان ساده، سریع و آبی‌وسفید</p>
+    <input id="name" maxlength="30" placeholder="نام شما">
+    <label class="file">📷 انتخاب عکس پروفایل
+      <input id="avatar" type="file" accept="image/*">
+    </label>
+    <img id="preview" class="avatarPreview hidden">
+    <button id="loginBtn">ورود</button>
+    <small>در این نسخه ورود با نام انجام می‌شود؛ برای امنیت بیشتر نسخه نهایی بهتر است احراز هویت واقعی داشته باشد.</small>
+  </div>
+</div>
+
+<div id="app" class="app hidden">
+  <aside class="side">
+    <div class="top"><b>🦇 گوربا بتمن</b><span id="me"></span></div>
+    <input id="search" class="search" placeholder="جست‌وجوی نام...">
+    <div id="users"></div>
+  </aside>
+  <main class="chat">
+    <header id="head">یک نفر را انتخاب کنید</header>
+    <section id="messages"><div class="empty">💬<br>برای شروع، یک کاربر را انتخاب کن.</div></section>
+    <form id="form" class="composer hidden">
+      <input id="text" autocomplete="off" placeholder="پیام خود را بنویسید...">
+      <button>➤</button>
+    </form>
+  </main>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
