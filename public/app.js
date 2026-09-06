@@ -1,5 +1,6 @@
-let ws;
+let ws = null;
 let myName = "";
+let selectedPeer = "";
 
 const $ = id => document.getElementById(id);
 
@@ -11,33 +12,24 @@ $("join").onclick = async () => {
     return;
   }
 
-  const response = await fetch("/api/register", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: myName })
-  });
+  try {
+    const response = await fetch("/api/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: myName })
+    });
 
-  if (!response.ok) {
-    alert("ثبت نام انجام نشد");
-    return;
+    if (!response.ok) {
+      alert("ثبت نام انجام نشد");
+      return;
+    }
+
+    $("login").classList.add("hidden");
+    $("main").classList.remove("hidden");
+    $("status").textContent = "آماده";
+  } catch {
+    alert("اتصال به سرور برقرار نشد");
   }
-
-  $("login").classList.add("hidden");
-  $("main").classList.remove("hidden");
-
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
-
-  ws.onopen = () => $("status").textContent = "متصل";
-  ws.onclose = () => $("status").textContent = "قطع شد";
-  ws.onerror = () => $("status").textContent = "خطا";
-
-  ws.onmessage = event => {
-    try {
-      const m = JSON.parse(event.data);
-      add(m.name, m.text);
-    } catch {}
-  };
 };
 
 let searchTimer;
@@ -59,36 +51,115 @@ async function searchUsers() {
     const data = await response.json();
 
     for (const name of data.users || []) {
+      if (name.toLocaleLowerCase("fa-IR") === myName.toLocaleLowerCase("fa-IR")) {
+        continue;
+      }
+
       const button = document.createElement("button");
       button.className = "user";
       button.type = "button";
-      button.textContent = name;
-      button.onclick = () => {
-        $("search").value = name;
-        results.innerHTML = "";
-        $("text").focus();
-      };
+      button.textContent = "👤 " + name;
+
+      button.onclick = () => selectUser(name);
+
       results.appendChild(button);
     }
   } catch {}
 }
+
+function selectUser(name) {
+  selectedPeer = name;
+  $("peerName").textContent = name;
+  $("chatHint").textContent = "چت خصوصی با " + name;
+  $("results").innerHTML = "";
+  $("search").value = "";
+  $("messages").innerHTML = "";
+
+  $("text").disabled = false;
+  $("form button").disabled = false;
+
+  connectPrivateChat();
+}
+
+function connectPrivateChat() {
+  if (ws) {
+    try { ws.close(); } catch {}
+    ws = null;
+  }
+
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const params = new URLSearchParams({
+    me: myName,
+    peer: selectedPeer
+  });
+
+  ws = new WebSocket(`${proto}://${location.host}/ws?${params.toString()}`);
+
+  $("status").textContent = "در حال اتصال...";
+
+  ws.onopen = () => {
+    $("status").textContent = "متصل";
+  };
+
+  ws.onclose = () => {
+    $("status").textContent = "قطع شد";
+  };
+
+  ws.onerror = () => {
+    $("status").textContent = "خطا";
+  };
+
+  ws.onmessage = event => {
+    try {
+      const message = JSON.parse(event.data);
+      add(message.name, message.text);
+    } catch {}
+  };
+}
+
+$("back").onclick = () => {
+  selectedPeer = "";
+
+  if (ws) {
+    try { ws.close(); } catch {}
+    ws = null;
+  }
+
+  $("peerName").textContent = "یک نفر را انتخاب کن";
+  $("chatHint").textContent = "برای شروع، از بالا یک کاربر را انتخاب کن.";
+  $("messages").innerHTML = '<div class="empty">برای شروع، یک کاربر را از جستجو انتخاب کن.</div>';
+  $("text").disabled = true;
+  $("form button").disabled = true;
+};
 
 $("form").onsubmit = event => {
   event.preventDefault();
 
   const text = $("text").value.trim();
 
-  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+  if (
+    !text ||
+    !selectedPeer ||
+    !ws ||
+    ws.readyState !== WebSocket.OPEN
+  ) {
+    return;
+  }
 
-  ws.send(JSON.stringify({ name: myName, text }));
-  add("من", text);
+  ws.send(JSON.stringify({
+    name: myName,
+    text,
+    to: selectedPeer
+  }));
+
   $("text").value = "";
   $("text").focus();
 };
 
 function add(name, text) {
   const d = document.createElement("div");
-  d.className = "msg";
+  d.className = "msg" +
+    (name.toLocaleLowerCase("fa-IR") === myName.toLocaleLowerCase("fa-IR") ? " mine" : "");
 
   const b = document.createElement("b");
   b.textContent = name;

@@ -9,16 +9,23 @@ input{width:100%;padding:14px;border:1px solid #ccd9e6;border-radius:10px;font-s
 input:focus{border-color:#1687e8}
 button{border:0;border-radius:10px;background:#1687e8;color:#fff;padding:12px 20px;font-size:16px;cursor:pointer}
 button:hover{opacity:.92}
+button:disabled{opacity:.5;cursor:not-allowed}
 .hidden{display:none}
 #main{flex:1;display:flex;flex-direction:column;min-height:0}
 .search{padding:12px;border-bottom:1px solid #ddd;background:#f8fbff}
 .search input{margin:0}
 #results{display:flex;flex-direction:column;gap:6px;margin-top:6px}
-.user{background:#eaf4ff;color:#1687e8;border:1px solid #d5eaff;text-align:right;padding:10px 12px;border-radius:10px;cursor:pointer}
+.user{background:#eaf4ff;color:#1687e8;border:1px solid #d5eaff;text-align:right;padding:10px 12px;border-radius:10px;cursor:pointer;width:100%}
 .user:hover{background:#dceeff}
+.chat-title{display:flex;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid #ddd;background:#fff}
+.chat-title button{padding:7px 12px}
+.chat-title strong,.chat-title small{display:block}
+.chat-title small{font-size:11px;color:#789;margin-top:3px}
 #chat{flex:1;display:flex;flex-direction:column;min-height:0}
 #messages{flex:1;overflow:auto;padding:15px}
+.empty{height:100%;display:grid;place-items:center;color:#789;text-align:center;padding:30px}
 .msg{padding:10px 13px;margin:8px 0;background:#eaf4ff;border-radius:12px}
+.msg.mine{background:#dff6e8}
 .msg b{display:block;color:#1687e8;margin-bottom:4px}
 form{display:flex;gap:8px;padding:12px;border-top:1px solid #ddd}
 form input{margin:0;flex:1}

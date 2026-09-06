@@ -17,7 +17,7 @@
       <h2>ورود</h2>
       <p>یک نام نمایشی برای ورود انتخاب کن.</p>
       <input id="name" maxlength="40" placeholder="نام نمایشی">
-      <button id="join">ورود به چت</button>
+      <button id="join">ورود به گوربا بتمن</button>
     </section>
 
     <section id="main" class="hidden">
@@ -26,11 +26,19 @@
         <div id="results"></div>
       </div>
 
+      <div class="chat-title">
+        <button id="back" type="button">←</button>
+        <div>
+          <strong id="peerName">یک نفر را انتخاب کن</strong>
+          <small id="chatHint">برای شروع، از بالا یک کاربر را انتخاب کن.</small>
+        </div>
+      </div>
+
       <section id="chat">
         <div id="messages"></div>
         <form id="form">
-          <input id="text" maxlength="1000" autocomplete="off" placeholder="پیامت را بنویس...">
-          <button type="submit">ارسال</button>
+          <input id="text" maxlength="1000" autocomplete="off" placeholder="پیامت را بنویس..." disabled>
+          <button type="submit" disabled>ارسال</button>
         </form>
       </section>
     </section>
