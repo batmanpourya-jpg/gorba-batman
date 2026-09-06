@@ -1,1 +1,25 @@
-*{box-sizing:border-box}body{margin:0;font-family:Tahoma,Arial,sans-serif;background:#eef6ff;color:#123}.app{max-width:700px;margin:auto;height:100vh;background:#fff;display:flex;flex-direction:column;box-shadow:0 0 25px #0001}header{background:#1687e8;color:#fff;padding:18px 20px;display:flex;justify-content:space-between}.card{margin:40px 20px;padding:25px;border-radius:16px;background:#f5faff}input{width:100%;padding:14px;border:1px solid #ccd9e6;border-radius:10px;font-size:16px;margin:8px 0}button{border:0;border-radius:10px;background:#1687e8;color:#fff;padding:12px 20px;font-size:16px;cursor:pointer}#chat{flex:1;display:flex;flex-direction:column;min-height:0}#messages{flex:1;overflow:auto;padding:15px}.msg{padding:10px 13px;margin:8px 0;background:#eaf4ff;border-radius:12px}.msg b{display:block;color:#1687e8;margin-bottom:4px}form{display:flex;gap:8px;padding:12px;border-top:1px solid #ddd}form input{margin:0;flex:1}.hidden{display:none}#status{font-size:12px;opacity:.9}
+*{box-sizing:border-box}
+body{margin:0;font-family:Tahoma,Arial,sans-serif;background:#eef6ff;color:#123}
+.app{max-width:700px;margin:auto;height:100vh;background:#fff;display:flex;flex-direction:column;box-shadow:0 0 25px #0001}
+header{background:#1687e8;color:#fff;padding:18px 20px;display:flex;justify-content:space-between;align-items:center}
+.card{margin:40px 20px;padding:25px;border-radius:16px;background:#f5faff}
+.card h2{margin-top:0}
+.card p{color:#567}
+input{width:100%;padding:14px;border:1px solid #ccd9e6;border-radius:10px;font-size:16px;margin:8px 0;outline:none}
+input:focus{border-color:#1687e8}
+button{border:0;border-radius:10px;background:#1687e8;color:#fff;padding:12px 20px;font-size:16px;cursor:pointer}
+button:hover{opacity:.92}
+.hidden{display:none}
+#main{flex:1;display:flex;flex-direction:column;min-height:0}
+.search{padding:12px;border-bottom:1px solid #ddd;background:#f8fbff}
+.search input{margin:0}
+#results{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.user{background:#eaf4ff;color:#1687e8;border:1px solid #d5eaff;text-align:right;padding:10px 12px;border-radius:10px;cursor:pointer}
+.user:hover{background:#dceeff}
+#chat{flex:1;display:flex;flex-direction:column;min-height:0}
+#messages{flex:1;overflow:auto;padding:15px}
+.msg{padding:10px 13px;margin:8px 0;background:#eaf4ff;border-radius:12px}
+.msg b{display:block;color:#1687e8;margin-bottom:4px}
+form{display:flex;gap:8px;padding:12px;border-top:1px solid #ddd}
+form input{margin:0;flex:1}
+#status{font-size:12px;opacity:.9}

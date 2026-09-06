@@ -1,1 +1,41 @@
-<!doctype html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>گوربا بتمن</title><link rel="stylesheet" href="/style.css"></head><body><div class="app"><header><b>گوربا بتمن</b><span id="status">آماده</span></header><section id="login" class="card"><h2>ورود</h2><p>یک نام نمایشی برای ورود به چت انتخاب کن.</p><input id="name" maxlength="40" placeholder="نام نمایشی"><button id="join">ورود به چت</button></section><section id="chat" class="hidden"><div id="messages"></div><form id="form"><input id="text" maxlength="1000" autocomplete="off" placeholder="پیامت را بنویس..."><button type="submit">ارسال</button></form></section></div><script src="/app.js"></script></body></html>
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>گوربا بتمن</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <b>گوربا بتمن</b>
+      <span id="status">آماده</span>
+    </header>
+
+    <section id="login" class="card">
+      <h2>ورود</h2>
+      <p>یک نام نمایشی برای ورود انتخاب کن.</p>
+      <input id="name" maxlength="40" placeholder="نام نمایشی">
+      <button id="join">ورود به چت</button>
+    </section>
+
+    <section id="main" class="hidden">
+      <div class="search">
+        <input id="search" maxlength="40" placeholder="جستجوی اسم کاربر...">
+        <div id="results"></div>
+      </div>
+
+      <section id="chat">
+        <div id="messages"></div>
+        <form id="form">
+          <input id="text" maxlength="1000" autocomplete="off" placeholder="پیامت را بنویس...">
+          <button type="submit">ارسال</button>
+        </form>
+      </section>
+    </section>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
