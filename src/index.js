@@ -93,8 +93,8 @@ export class Messenger {
   }
   async login(req){
     const b=await req.json(); const username=String(b.username||"").trim().toLowerCase(); const password=String(b.password||"");
-    const u=this.sql.exec("SELECT * FROM users WHERE username=?",username).one(); if(!u) return json({error:"نام کاربری یا رمز عبور اشتباه است"},401);
-    const ph=await hashPassword(password,u.salt); if(ph!==u.password_hash) return json({error:"نام کاربری یا رمز عبور اشتباه است"},401);
+    const u=this.sql.exec("SELECT * FROM users WHERE username=?",username).one(); if(!u) return json({error:"این نام کاربری پیدا نشد؛ اگر حساب قبلی را ساخته بودی، ممکن است در نسخه قدیمی ذخیره شده باشد. از ثبت‌نام استفاده کن."},401);
+    const ph=await hashPassword(password,u.salt); if(ph!==u.password_hash) return json({error:"رمز عبور اشتباه است"},401);
     const token=id()+id(); this.sql.exec("INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)",token,u.id,Date.now());
     return new Response(JSON.stringify({ok:true,user:this.user(u.id)}),{headers:{"content-type":"application/json","set-cookie":`gb_session=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000`}});
   }
