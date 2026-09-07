@@ -96,7 +96,7 @@ search.addEventListener("input",async()=>{
   }
 });
 
-function selectUser(name){
+async function selectUser(name){
   if(!name||name===me)return;
   peer=name;
   chatTitle.hidden=false;
@@ -106,12 +106,23 @@ function selectUser(name){
   if(ws)try{ws.close()}catch{}
   const proto=location.protocol==="https:"?"wss:":"ws:";
   ws=new WebSocket(`${proto}//${location.host}/ws?me=${encodeURIComponent(me)}&peer=${encodeURIComponent(peer)}`);
-  ws.onopen=()=>{setStatus("متصل");hint.textContent="متصل؛ پیام‌ها ذخیره می‌شوند.";text.disabled=false;send.disabled=false;text.focus();setActiveInbox(peer)};
-  // Sending uses /api/send and therefore does not depend on this WebSocket.
-  text.disabled=false; send.disabled=false;
+  // Sending is HTTP-based, so the other user and even this WebSocket do not
+  // need to be online. The WebSocket is only for live delivery.
+  text.disabled=false; send.disabled=false; text.focus();
+  ws.onopen=()=>{setStatus("متصل");hint.textContent="متصل؛ پیام‌ها ذخیره می‌شوند.";setActiveInbox(peer);};
   ws.onmessage=e=>{try{const d=JSON.parse(e.data);if(d.type==="message")render(d)}catch{}};
-  ws.onerror=()=>{setStatus("خطا");hint.textContent="اتصال برقرار نشد."};
-  ws.onclose=()=>{if(ws?.readyState!==WebSocket.OPEN){text.disabled=true;send.disabled=true}setStatus("آماده")};
+  ws.onerror=()=>{setStatus("آماده");hint.textContent="اتصال زنده برقرار نشد؛ ارسال پیام همچنان فعال است."};
+  ws.onclose=()=>{setStatus("آماده");hint.textContent="اتصال زنده قطع شد؛ ارسال پیام همچنان فعال است.";};
+  // The pair Durable Object owns the history, so this also works if the
+  // WebSocket takes a moment to connect.
+  try{
+    const hr=await fetch(`/api/history?me=${encodeURIComponent(me)}&peer=${encodeURIComponent(peer)}`);
+    const hd=await hr.json();
+    if(hd.ok){
+      messages.innerHTML="";
+      for(const m of hd.messages||[]) render(m);
+    }
+  }catch{}
   loadConversations();
 }
 function render(m){

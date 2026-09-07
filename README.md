@@ -32,3 +32,7 @@ Cloudflare Worker قبلی از `migrations` قدیمی استفاده می‌ک
 
 ### ارسال آفلاین/غیرهم‌زمان
 ارسال پیام از مسیر HTTP انجام می‌شود و برای ارسال، آنلاین بودن گیرنده یا باز بودن چت او لازم نیست. WebSocket فقط برای دریافت زنده و همگام‌سازی رابط کاربری استفاده می‌شود.
+
+
+## Fix: offline-safe private chats
+Messages are stored in the pair-specific Durable Object. `/api/send` and `/api/history` now use the same pair room as `/ws`, so sending does not require the recipient or WebSocket to be online, and chat history is scoped to the selected pair. The inbox remains stored in per-user Durable Objects.
