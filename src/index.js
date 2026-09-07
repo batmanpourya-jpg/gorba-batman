@@ -1,476 +1,127 @@
-import { DurableObject } from "cloudflare:workers";
-
-const MAX_NAME = 40;
-const MAX_TEXT = 2000;
-
-function cleanName(v) { return String(v || "").trim().slice(0, MAX_NAME); }
-function lower(v) { return cleanName(v).toLocaleLowerCase("fa-IR"); }
-function roomKey(a, b) {
-  return [cleanName(a), cleanName(b)].sort((x, y) => lower(x).localeCompare(lower(y), "fa")).join("::");
+const json = (data, status = 200) => new Response(JSON.stringify(data), {
+  status,
+  headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
+});
+const id = () => crypto.randomUUID();
+const enc = new TextEncoder();
+const toHex = b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2,"0")).join("");
+async function hashPassword(password, salt) {
+  const key = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name:"PBKDF2", salt:enc.encode(salt), iterations:120000, hash:"SHA-256" }, key, 256);
+  return toHex(bits);
 }
-function out(data, status = 200) {
-  return Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
+function cookie(req, name) {
+  const m = (req.headers.get("cookie") || "").match(new RegExp(`(?:^|; )${name}=([^;]+)`));
+  return m ? decodeURIComponent(m[1]) : null;
 }
-function previewText(text, mediaType, fileName) {
-  if (text) return String(text).slice(0, 80);
-  if ((mediaType || "").startsWith("image/")) return "📷 عکس";
-  if ((mediaType || "").startsWith("video/")) return "🎥 ویدیو";
-  return fileName ? `📎 ${String(fileName).slice(0, 60)}` : "📎 فایل";
-}
-
-// Kept exported because the older deployed migration depends on this class name.
-export class ChatRoom extends DurableObject {}
-
-export class ChatRoomV2 extends DurableObject {
-  constructor(ctx, env) {
-    super(ctx, env);
-    this.env = env;
-    this.sql = ctx.storage.sql;
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        name TEXT PRIMARY KEY,
-        name_lc TEXT NOT NULL,
-        avatar_url TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS users_name_lc ON users(name_lc);
-
-      CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        sender TEXT NOT NULL,
-        text TEXT,
-        media_url TEXT,
-        media_type TEXT,
-        file_name TEXT,
-        created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS messages_created_at ON messages(created_at);
-
-      CREATE TABLE IF NOT EXISTS conversations (
-        peer TEXT PRIMARY KEY,
-        last_sender TEXT NOT NULL,
-        last_text TEXT,
-        last_media_type TEXT,
-        last_file_name TEXT,
-        last_at INTEGER NOT NULL,
-        unread INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX IF NOT EXISTS conversations_last_at ON conversations(last_at DESC);
-    `);
-  }
-
-  async fetch(request) {
-    const url = new URL(request.url);
-
-    // ---------- Global user directory ----------
-    if (url.pathname === "/api/register" && request.method === "POST") {
-      try {
-        const body = await request.json();
-        const name = cleanName(body.name);
-        if (!name) return out({ ok: false, error: "نام وارد نشده" }, 400);
-        const now = Date.now();
-        this.sql.exec(
-          `INSERT INTO users(name,name_lc,created_at,updated_at)
-           VALUES(?,?,?,?)
-           ON CONFLICT(name) DO UPDATE SET updated_at=excluded.updated_at`,
-          name, lower(name), now, now
-        );
-        return out({ ok: true, name });
-      } catch {
-        return out({ ok: false, error: "درخواست نامعتبر است" }, 400);
-      }
-    }
-
-    if (url.pathname === "/api/search" && request.method === "GET") {
-      const q = lower(url.searchParams.get("q") || "");
-      if (!q) return out({ ok: true, users: [] });
-      const rows = this.sql.exec(
-        `SELECT name, avatar_url FROM users WHERE name_lc LIKE ? ORDER BY name_lc LIMIT 20`,
-        `%${q}%`
-      ).toArray();
-      return out({ ok: true, users: rows });
-    }
-
-    if (url.pathname === "/api/profile" && request.method === "GET") {
-      const name = cleanName(url.searchParams.get("name"));
-      const row = this.sql.exec(`SELECT name,avatar_url FROM users WHERE name=?`, name).toArray()[0];
-      return out({ ok: true, user: row || { name, avatar_url: null } });
-    }
-
-    if (url.pathname === "/api/profile" && request.method === "POST") {
-      try {
-        const body = await request.json();
-        const name = cleanName(body.name);
-        const avatarUrl = String(body.avatarUrl || "").slice(0, 2000);
-        if (!name) return out({ ok: false, error: "نام وارد نشده" }, 400);
-        const now = Date.now();
-        this.sql.exec(
-          `INSERT INTO users(name,name_lc,avatar_url,created_at,updated_at)
-           VALUES(?,?,?,?,?)
-           ON CONFLICT(name) DO UPDATE SET avatar_url=excluded.avatar_url,updated_at=excluded.updated_at`,
-          name, lower(name), avatarUrl || null, now, now
-        );
-        return out({ ok: true, name, avatarUrl: avatarUrl || null });
-      } catch {
-        return out({ ok: false, error: "درخواست نامعتبر است" }, 400);
-      }
-    }
-
-    // ---------- Internal inbox push (called by another Durable Object) ----------
-    // This avoids relying on Durable Object RPC availability and works across
-    // deployments while keeping the actual inbox state inside the user's DO.
-    if (url.pathname === "/internal/inbox-push" && request.method === "POST") {
-      try {
-        const note = await request.json();
-        const owner = cleanName(note?.owner);
-        const peer = cleanName(note?.peer);
-        const sender = cleanName(note?.sender);
-        if (!owner || !peer || !sender) return out({ ok: false }, 400);
-
-        const text = String(note?.text || "").slice(0, MAX_TEXT) || null;
-        const mediaType = String(note?.mediaType || "").slice(0, 100) || null;
-        const fileName = String(note?.fileName || "").slice(0, 180) || null;
-        const lastAt = Number(note?.createdAt) || Date.now();
-
-        let unread = 0;
-        if (lower(owner) !== lower(sender)) {
-          unread = 1;
-          for (const ws of this.ctx.getWebSockets()) {
-            const state = ws.deserializeAttachment() || {};
-            if (lower(state.me) === lower(owner) && lower(state.activePeer) === lower(sender)) {
-              unread = 0;
-              break;
-            }
-          }
-        }
-
-        const existing = this.sql.exec(
-          `SELECT unread FROM conversations WHERE peer=?`, peer
-        ).toArray()[0];
-        const nextUnread = lower(owner) === lower(sender)
-          ? 0
-          : (unread === 0 ? 0 : Number(existing?.unread || 0) + 1);
-
-        this.sql.exec(
-          `INSERT INTO conversations(peer,last_sender,last_text,last_media_type,last_file_name,last_at,unread)
-           VALUES(?,?,?,?,?,?,?)
-           ON CONFLICT(peer) DO UPDATE SET
-             last_sender=excluded.last_sender,
-             last_text=excluded.last_text,
-             last_media_type=excluded.last_media_type,
-             last_file_name=excluded.last_file_name,
-             last_at=excluded.last_at,
-             unread=excluded.unread`,
-          peer, sender, text, mediaType, fileName, lastAt, nextUnread
-        );
-
-        this.broadcastInbox();
-        return out({ ok: true });
-      } catch (e) {
-        console.error("internal inbox push failed", e);
-        return out({ ok: false }, 400);
-      }
-    }
-
-    // ---------- Per-user inbox ----------
-    if (url.pathname === "/api/conversations" && request.method === "GET") {
-      const rows = this.sql.exec(
-        `SELECT c.peer,
-                u.avatar_url AS avatar_url,
-                c.last_sender,
-                c.last_text,
-                c.last_media_type,
-                c.last_file_name,
-                c.last_at,
-                c.unread
-         FROM conversations c
-         LEFT JOIN users u ON u.name=c.peer
-         ORDER BY c.last_at DESC LIMIT 100`
-      ).toArray();
-      return out({ ok: true, conversations: rows });
-    }
-
-    // ---------- Send message without requiring the other person to be online ----------
-    if (url.pathname === "/api/send" && request.method === "POST") {
-      try {
-        const body = await request.json();
-        const sender = cleanName(body.sender);
-        const peer = cleanName(body.peer);
-        if (!sender || !peer || lower(sender) === lower(peer)) {
-          return out({ ok: false, error: "کاربر یا گیرنده نامعتبر است" }, 400);
-        }
-
-        const text = String(body.text || "").trim().slice(0, MAX_TEXT);
-        const mediaUrl = String(body.mediaUrl || "").slice(0, 4000);
-        const mediaType = String(body.mediaType || "").slice(0, 100);
-        const fileName = String(body.fileName || "").slice(0, 180);
-        if (!text && !mediaUrl) return out({ ok: false, error: "پیام خالی است" }, 400);
-
-        const row = {
-          id: crypto.randomUUID(),
-          sender,
-          text: text || null,
-          media_url: mediaUrl || null,
-          media_type: mediaType || null,
-          file_name: fileName || null,
-          created_at: Date.now()
-        };
-
-        this.sql.exec(
-          `INSERT INTO messages(id,sender,text,media_url,media_type,file_name,created_at)
-           VALUES(?,?,?,?,?,?,?)`,
-          row.id, row.sender, row.text, row.media_url, row.media_type, row.file_name, row.created_at
-        );
-
-        const payload = JSON.stringify({ type: "message", ...row });
-        for (const client of this.ctx.getWebSockets()) {
-          if (client.readyState === WebSocket.OPEN) {
-            try { client.send(payload); } catch {}
-          }
-        }
-
-        // The receiver does NOT need to be online. The inbox entry is persisted
-        // in the receiver's own Durable Object and will appear next time they open the app.
-        try {
-          const note = { text: row.text, mediaType: row.media_type, fileName: row.file_name, createdAt: row.created_at };
-          const senderHub = this.env.CHAT.get(this.env.CHAT.idFromName(`user:${lower(sender)}`));
-          const peerHub = this.env.CHAT.get(this.env.CHAT.idFromName(`user:${lower(peer)}`));
-          const makeReq = (owner, conversationPeer) => new Request("https://internal/inbox-push", {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ ...note, owner, peer: conversationPeer, sender })
-          });
-          await Promise.all([
-            senderHub.fetch(makeReq(sender, peer)),
-            peerHub.fetch(makeReq(peer, sender))
-          ]);
-        } catch (e) {
-          console.error("Inbox update failed", e);
-        }
-
-        return out({ ok: true, message: row });
-      } catch (e) {
-        console.error("send failed", e);
-        return out({ ok: false, error: "ارسال پیام ناموفق بود" }, 400);
-      }
-    }
-
-    // ---------- Private chat history ----------
-    if (url.pathname === "/api/history" && request.method === "GET") {
-      const rows = this.sql.exec(
-        `SELECT id,sender,text,media_url,media_type,file_name,created_at
-         FROM messages ORDER BY created_at DESC LIMIT 100`
-      ).toArray().reverse();
-      return out({ ok: true, messages: rows });
-    }
-
-    // ---------- User inbox realtime socket ----------
-    if (url.pathname === "/inboxws") {
-      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
-        return new Response("WebSocket required", { status: 426 });
-
-      const me = cleanName(url.searchParams.get("me"));
-      if (!me) return new Response("Missing user", { status: 400 });
-
-      const pair = new WebSocketPair();
-      const [client, server] = Object.values(pair);
-      this.ctx.acceptWebSocket(server);
-      server.serializeAttachment({ me, activePeer: "" });
-
-      const rows = this.sql.exec(
-        `SELECT c.peer,
-                u.avatar_url AS avatar_url,
-                c.last_sender,
-                c.last_text,
-                c.last_media_type,
-                c.last_file_name,
-                c.last_at,
-                c.unread
-         FROM conversations c
-         LEFT JOIN users u ON u.name=c.peer
-         ORDER BY c.last_at DESC LIMIT 100`
-      ).toArray();
-      if (server.readyState === WebSocket.OPEN) {
-        server.send(JSON.stringify({ type: "inbox", conversations: rows }));
-      }
-      return new Response(null, { status: 101, webSocket: client });
-    }
-
-    // Tell this user's inbox which chat is currently open.
-    if (url.pathname === "/inbox-active" && request.method === "POST") {
-      try {
-        const body = await request.json();
-        const me = cleanName(body.me);
-        const peer = cleanName(body.peer);
-        if (!me) return out({ ok: false }, 400);
-        for (const ws of this.ctx.getWebSockets()) {
-          const state = ws.deserializeAttachment() || {};
-          if (lower(state.me) === lower(me)) {
-            ws.serializeAttachment({ me, activePeer: peer });
-          }
-        }
-        if (peer) {
-          this.sql.exec(`UPDATE conversations SET unread=0 WHERE peer=?`, peer);
-          this.broadcastInbox();
-        }
-        return out({ ok: true });
-      } catch {
-        return out({ ok: false }, 400);
-      }
-    }
-
-    if (url.pathname === "/ws") {
-      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
-        return new Response("WebSocket required", { status: 426 });
-
-      const me = cleanName(url.searchParams.get("me"));
-      const peer = cleanName(url.searchParams.get("peer"));
-      if (!me || !peer || lower(me) === lower(peer))
-        return new Response("Two different users are required", { status: 400 });
-
-      const pair = new WebSocketPair();
-      const [client, server] = Object.values(pair);
-      this.ctx.acceptWebSocket(server);
-      server.serializeAttachment({ me, peer });
-
-      const history = this.sql.exec(
-        `SELECT id,sender,text,media_url,media_type,file_name,created_at
-         FROM messages ORDER BY created_at DESC LIMIT 100`
-      ).toArray().reverse();
-
-      for (const m of history) {
-        if (server.readyState === WebSocket.OPEN) server.send(JSON.stringify({ type: "message", ...m }));
-      }
-      return new Response(null, { status: 101, webSocket: client });
-    }
-
-    return new Response("Not found", { status: 404 });
-  }
-
-  broadcastInbox() {
-    const rows = this.sql.exec(
-      `SELECT c.peer,
-              u.avatar_url AS avatar_url,
-              c.last_sender,
-              c.last_text,
-              c.last_media_type,
-              c.last_file_name,
-              c.last_at,
-              c.unread
-       FROM conversations c
-       LEFT JOIN users u ON u.name=c.peer
-       ORDER BY c.last_at DESC LIMIT 100`
-    ).toArray();
-    const payload = JSON.stringify({ type: "inbox", conversations: rows });
-    for (const ws of this.ctx.getWebSockets()) {
-      if (ws.readyState === WebSocket.OPEN) {
-        try { ws.send(payload); } catch {}
-      }
-    }
-  }
-
-  async webSocketMessage(ws, message) {
-    let data;
-    try { data = typeof message === "string" ? JSON.parse(message) : null; } catch { return; }
-
-    // Inbox socket uses this message to update which chat is open.
-    if (data?.type === "active") {
-      const state = ws.deserializeAttachment() || {};
-      if (state.me) ws.serializeAttachment({ me: state.me, activePeer: cleanName(data.peer) });
-      return;
-    }
-
-    if (!data || !["message", "media"].includes(data.type)) return;
-
-    const session = ws.deserializeAttachment() || {};
-    const sender = cleanName(session.me);
-    const peer = cleanName(session.peer);
-    if (!sender || !peer) return;
-
-    const text = String(data.text || "").trim().slice(0, MAX_TEXT);
-    const mediaUrl = String(data.mediaUrl || "").slice(0, 4000);
-    const mediaType = String(data.mediaType || "").slice(0, 100);
-    const fileName = String(data.fileName || "").slice(0, 180);
-    if (!text && !mediaUrl) return;
-
-    const row = {
-      id: crypto.randomUUID(),
-      sender,
-      text: text || null,
-      media_url: mediaUrl || null,
-      media_type: mediaType || null,
-      file_name: fileName || null,
-      created_at: Date.now()
-    };
-
-    this.sql.exec(
-      `INSERT INTO messages(id,sender,text,media_url,media_type,file_name,created_at)
-       VALUES(?,?,?,?,?,?,?)`,
-      row.id, row.sender, row.text, row.media_url, row.media_type, row.file_name, row.created_at
-    );
-
-    const payload = JSON.stringify({ type: "message", ...row });
-    for (const client of this.ctx.getWebSockets()) {
-      if (client.readyState === WebSocket.OPEN) {
-        try { client.send(payload); } catch {}
-      }
-    }
-
-    // Update BOTH users' Rubika-style conversation lists immediately.
-    // We call the user's Durable Object through fetch rather than relying on
-    // RPC, so the notification path remains reliable after code deployments.
-    try {
-      const note = {
-        text: row.text,
-        mediaType: row.media_type,
-        fileName: row.file_name,
-        createdAt: row.created_at
-      };
-      const senderHub = this.env.CHAT.get(this.env.CHAT.idFromName(`user:${lower(sender)}`));
-      const peerHub = this.env.CHAT.get(this.env.CHAT.idFromName(`user:${lower(peer)}`));
-      const makeReq = (owner, conversationPeer) => new Request(
-        "https://internal/inbox-push",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ ...note, owner, peer: conversationPeer, sender })
-        }
-      );
-      await Promise.all([
-        senderHub.fetch(makeReq(sender, peer)),
-        peerHub.fetch(makeReq(peer, sender))
-      ]);
-    } catch (e) {
-      console.error("Inbox update failed", e);
-    }
-  }
-
-  async webSocketClose(ws, code, reason) {
-    try { ws.close(code, reason); } catch {}
-  }
-  async webSocketError(ws, error) { console.error("WebSocket error", error); }
-}
+function keyFor(a,b){ return [a,b].sort().join("::"); }
 
 export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-
-    if (url.pathname.startsWith("/api/") || url.pathname === "/ws" || url.pathname === "/inboxws" || url.pathname === "/inbox-active") {
-      const me = cleanName(url.searchParams.get("me"));
-      const peer = cleanName(url.searchParams.get("peer"));
-
-      let room = "users";
-      if (url.pathname === "/ws") {
-        if (!me || !peer) return new Response("Missing users", { status: 400 });
-        room = roomKey(me, peer);
-      } else if (url.pathname === "/inboxws" || url.pathname === "/inbox-active" || url.pathname === "/api/conversations") {
-        if (!me) return new Response("Missing user", { status: 400 });
-        room = `user:${lower(me)}`;
-      }
-
-      return env.CHAT.get(env.CHAT.idFromName(room)).fetch(request);
+  async fetch(req, env) {
+    const url = new URL(req.url);
+    if (url.pathname === "/ws") {
+      const session = cookie(req,"gb_session");
+      if (!session) return new Response("Unauthorized",{status:401});
+      const stub = env.MESSENGER.get(env.MESSENGER.idFromName("main"));
+      return stub.fetch(new Request(new URL("/ws", url), { method:"GET", headers:{"X-Session":session,"Upgrade":req.headers.get("Upgrade")||"websocket"} }));
     }
-
-    return env.ASSETS.fetch(request);
+    if (url.pathname.startsWith("/api/")) {
+      const stub = env.MESSENGER.get(env.MESSENGER.idFromName("main"));
+      return stub.fetch(new Request(url, { method:req.method, headers:req.headers, body:req.method === "GET" || req.method === "HEAD" ? undefined : req.body }));
+    }
+    return env.ASSETS.fetch(req);
   }
 };
+
+export class Messenger {
+  constructor(ctx) {
+    this.ctx = ctx;
+    this.sql = ctx.storage.sql;
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, avatar TEXT DEFAULT '', password_hash TEXT NOT NULL, salt TEXT NOT NULL, created_at INTEGER NOT NULL);`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at INTEGER NOT NULL);`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, chat_key TEXT NOT NULL, sender_id TEXT NOT NULL, receiver_id TEXT NOT NULL, text TEXT DEFAULT '', kind TEXT DEFAULT 'text', attachment_name TEXT DEFAULT '', attachment_url TEXT DEFAULT '', created_at INTEGER NOT NULL, seen INTEGER DEFAULT 0);`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_messages_chat_time ON messages(chat_key, created_at);`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS conversations(chat_key TEXT PRIMARY KEY, a TEXT NOT NULL, b TEXT NOT NULL, updated_at INTEGER NOT NULL, last_text TEXT DEFAULT '', last_sender TEXT DEFAULT '');`);
+  }
+  userBySession(token){ return token ? this.sql.exec("SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=?", token).one() : null; }
+  user(id){ return this.sql.exec("SELECT id,username,name,avatar,created_at FROM users WHERE id=?",id).one(); }
+  broadcast(payload, excludeId=null){
+    for(const ws of this.ctx.getWebSockets()){
+      const a=ws.deserializeAttachment?.();
+      if(!a || a.userId===excludeId) continue;
+      try{ ws.send(JSON.stringify(payload)); }catch{}
+    }
+  }
+  async fetch(req){
+    const url=new URL(req.url);
+    if(url.pathname==="/ws") return this.ws(req);
+    const token=req.headers.get("X-Session") || cookie(req,"gb_session");
+    const me=this.userBySession(token);
+    if(url.pathname==="/api/register" && req.method==="POST") return this.register(req);
+    if(url.pathname==="/api/login" && req.method==="POST") return this.login(req);
+    if(url.pathname==="/api/logout" && req.method==="POST"){ if(token) this.sql.exec("DELETE FROM sessions WHERE token=?",token); return json({ok:true}); }
+    if(url.pathname==="/api/me") return me ? json({ok:true,user:this.user(me.id)}) : json({ok:false},401);
+    if(!me) return json({error:"unauthorized"},401);
+    if(url.pathname==="/api/users"){
+      const q=(url.searchParams.get("q")||"").trim();
+      if(!q) return json({users:[]});
+      return json({users:this.sql.exec("SELECT id,username,name,avatar FROM users WHERE id<>? AND (username LIKE ? OR name LIKE ?) ORDER BY name LIMIT 30",me.id,`%${q}%`,`%${q}%`).toArray()});
+    }
+    if(url.pathname==="/api/conversations") return this.conversations(me.id);
+    if(url.pathname==="/api/history"){
+      const peer=url.searchParams.get("peer"); if(!peer) return json({messages:[]});
+      const k=keyFor(me.id,peer);
+      return json({messages:this.sql.exec("SELECT * FROM messages WHERE chat_key=? ORDER BY created_at ASC LIMIT 500",k).toArray()});
+    }
+    if(url.pathname==="/api/send" && req.method==="POST") return this.send(req,me);
+    if(url.pathname==="/api/seen" && req.method==="POST"){
+      const body=await req.json(); const peer=body.peer; if(!peer) return json({ok:false},400);
+      this.sql.exec("UPDATE messages SET seen=1 WHERE chat_key=? AND receiver_id=?",keyFor(me.id,peer),me.id);
+      this.broadcast({type:"seen",peerId:me.id,chatKey:keyFor(me.id,peer)},me.id);
+      return json({ok:true});
+    }
+    return json({error:"not found"},404);
+  }
+  async register(req){
+    const b=await req.json(); const username=String(b.username||"").trim().toLowerCase(); const name=String(b.name||"").trim(); const password=String(b.password||"");
+    if(!/^[a-z0-9_\.]{3,24}$/.test(username) || name.length<2 || password.length<6) return json({error:"نام کاربری یا اطلاعات ورود معتبر نیست"},400);
+    if(this.sql.exec("SELECT id FROM users WHERE username=?",username).one()) return json({error:"این نام کاربری قبلاً گرفته شده"},409);
+    const uid=id(), salt=id(); const ph=await hashPassword(password,salt); const now=Date.now();
+    this.sql.exec("INSERT INTO users(id,username,name,password_hash,salt,created_at) VALUES(?,?,?,?,?,?)",uid,username,name,ph,salt,now);
+    const token=id()+id(); this.sql.exec("INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)",token,uid,now);
+    return new Response(JSON.stringify({ok:true,user:this.user(uid)}),{headers:{"content-type":"application/json","set-cookie":`gb_session=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000`}});
+  }
+  async login(req){
+    const b=await req.json(); const username=String(b.username||"").trim().toLowerCase(); const password=String(b.password||"");
+    const u=this.sql.exec("SELECT * FROM users WHERE username=?",username).one(); if(!u) return json({error:"نام کاربری یا رمز عبور اشتباه است"},401);
+    const ph=await hashPassword(password,u.salt); if(ph!==u.password_hash) return json({error:"نام کاربری یا رمز عبور اشتباه است"},401);
+    const token=id()+id(); this.sql.exec("INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)",token,u.id,Date.now());
+    return new Response(JSON.stringify({ok:true,user:this.user(u.id)}),{headers:{"content-type":"application/json","set-cookie":`gb_session=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000`}});
+  }
+  conversations(uid){
+    const rows=this.sql.exec(`SELECT c.*, CASE WHEN c.a=? THEN c.b ELSE c.a END peer_id FROM conversations c WHERE c.a=? OR c.b=? ORDER BY c.updated_at DESC`,uid,uid,uid).toArray();
+    return json({conversations:rows.map(r=>({...r,peer:this.user(r.peer_id),unread:this.sql.exec("SELECT COUNT(*) n FROM messages WHERE chat_key=? AND receiver_id=? AND seen=0",r.chat_key,uid).one().n}))});
+  }
+  async send(req,me){
+    const b=await req.json(); const peerId=String(b.peerId||""); const text=String(b.text||"");
+    const peer=this.user(peerId); if(!peer || peer.id===me.id) return json({error:"مخاطب پیدا نشد"},400);
+    if(!text.trim() && !b.attachmentUrl) return json({error:"پیام خالی است"},400);
+    const now=Date.now(), k=keyFor(me.id,peerId), mid=id();
+    this.sql.exec("INSERT INTO messages(id,chat_key,sender_id,receiver_id,text,kind,attachment_name,attachment_url,created_at,seen) VALUES(?,?,?,?,?,?,?,?,?,0)",mid,k,me.id,peerId,text,String(b.kind||"text"),String(b.attachmentName||""),String(b.attachmentUrl||""),now);
+    this.sql.exec("INSERT INTO conversations(chat_key,a,b,updated_at,last_text,last_sender) VALUES(?,?,?,?,?,?) ON CONFLICT(chat_key) DO UPDATE SET updated_at=excluded.updated_at,last_text=excluded.last_text,last_sender=excluded.last_sender",k,me.id,peerId,now,text||"📎",me.id);
+    const msg=this.sql.exec("SELECT * FROM messages WHERE id=?",mid).one();
+    this.broadcast({type:"message",message:msg,peer:this.user(me.id)},me.id);
+    this.broadcast({type:"conversation",conversation:{chat_key:k,peer_id:me.id,peer:this.user(me.id),updated_at:now,last_text:text||"📎",last_sender:me.id,unread:1}},me.id);
+    return json({ok:true,message:msg});
+  }
+  ws(req){
+    const token=req.headers.get("X-Session"); const me=this.userBySession(token); if(!me) return new Response("Unauthorized",{status:401});
+    const pair=new WebSocketPair(); const client=pair[0], server=pair[1]; this.ctx.acceptWebSocket(server); server.serializeAttachment({userId:me.id});
+    server.send(JSON.stringify({type:"ready",user:this.user(me.id)}));
+    return new Response(null,{status:101,webSocket:client});
+  }
+  webSocketMessage(ws,message){
+    // HTTP API is authoritative; websocket is push-only in this build.
+  }
+  webSocketClose(ws){ try{ws.close();}catch{} }
+}

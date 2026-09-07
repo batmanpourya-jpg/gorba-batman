@@ -1,7 +1,7 @@
 {
-  "name": "gorba-batman",
+  "name": "gorba-batman-rebuild",
   "private": true,
-  "version": "2.0.0",
-  "scripts": { "deploy": "wrangler deploy" },
+  "type": "module",
+  "scripts": { "check": "node --check src/index.js" },
   "devDependencies": { "wrangler": "^4.30.0" }
 }

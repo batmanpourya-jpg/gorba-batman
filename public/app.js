@@ -1,183 +1,24 @@
-const $=id=>document.getElementById(id);
-const nameInput=$("name"), join=$("join"), login=$("login"), main=$("main"), status=$("status");
-const search=$("search"), results=$("results"), peerName=$("peerName"), hint=$("chatHint");
-const messages=$("messages"), form=$("form"), text=$("text"), send=$("send"), back=$("back");
-const avatarButton=$("avatarButton"), avatarFile=$("avatarFile"), avatar=$("avatar"), avatarText=$("avatarText");
-const mediaFile=$("mediaFile"), myName=$("myName"), conversations=$("conversations"), chatTitle=$("chatTitle"), chat=$("chat");
-let me=localStorage.getItem("gorba_me")||"", peer="", ws=null, inboxWs=null;
-const inboxKey=()=>`gorba_inbox_${encodeURIComponent(me)}`;
-
-function setStatus(s){status.textContent=s}
-function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
-function time(ts){return new Date(ts).toLocaleTimeString("fa-IR",{hour:"2-digit",minute:"2-digit"})}
-function preview(c){
-  if(c.last_text)return String(c.last_text).slice(0,55);
-  if((c.last_media_type||"").startsWith("image/"))return "📷 عکس";
-  if((c.last_media_type||"").startsWith("video/"))return "🎥 ویدیو";
-  return c.last_file_name?`📎 ${String(c.last_file_name).slice(0,45)}`:"پیام";
-}
-
-async function register(){
-  const name=(nameInput.value||"").trim();
-  if(!name)return alert("یک نام وارد کن.");
-  const r=await fetch("/api/register",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name})});
-  const d=await r.json(); if(!d.ok)return alert(d.error||"خطا");
-  me=d.name; localStorage.setItem("gorba_me",me); showMain(); await loadProfile(); connectInbox(); loadConversations();
-}
-function showMain(){login.classList.add("hidden");main.classList.remove("hidden");myName.textContent=me;setStatus("آماده")}
-async function loadProfile(){
-  if(!me)return;
-  const r=await fetch("/api/profile?name="+encodeURIComponent(me)); const d=await r.json();
-  if(d.user?.avatar_url){avatar.src=d.user.avatar_url;avatar.hidden=false;avatarText.hidden=true}
-}
-async function loadConversations(){
-  if(!me)return;
-  try{
-    const cached=JSON.parse(localStorage.getItem(inboxKey())||"null");
-    if(Array.isArray(cached)&&cached.length)renderConversations(cached);
-    const r=await fetch("/api/conversations?me="+encodeURIComponent(me));
-    const d=await r.json();
-    if(d.ok)renderConversations(d.conversations||[]);
-  }catch{}
-}
-function renderConversations(list){
-  try{localStorage.setItem(inboxKey(),JSON.stringify(list))}catch{}
-  conversations.innerHTML="";
-  if(!list.length){conversations.innerHTML='<div class="empty-list">هنوز پیامی نداری. اسم یک کاربر را جستجو کن و اولین پیام را بفرست.</div>';return}
-  for(const c of list){
-    const b=document.createElement("button");b.className="conversation"+(c.peer===peer?" active":"");
-    const avatarHtml=c.avatar_url?`<img src="${esc(c.avatar_url)}" alt="">`:`<span>👤</span>`;
-    const unread=Number(c.unread||0)>0?`<b class="unread">${Number(c.unread)>99?"99+":Number(c.unread)}</b>`:"";
-    b.innerHTML=`<div class="conv-avatar">${avatarHtml}</div><div class="conv-body"><div class="conv-top"><strong>${esc(c.peer)}</strong><time>${time(c.last_at)}</time></div><div class="conv-bottom"><span>${c.last_sender===me?"شما: ":""}${esc(preview(c))}</span>${unread}</div></div>`;
-    b.onclick=()=>selectUser(c.peer);
-    conversations.appendChild(b);
-  }
-}
-function upsertConversation(c){
-  // The server already returns the full ordered list. Re-rendering is cheap at this scale.
-  if(Array.isArray(c))renderConversations(c); else loadConversations();
-}
-function connectInbox(){
-  if(!me)return;
-  if(inboxWs)try{inboxWs.close()}catch{}
-  const proto=location.protocol==="https:"?"wss:":"ws:";
-  inboxWs=new WebSocket(`${proto}//${location.host}/inboxws?me=${encodeURIComponent(me)}`);
-  inboxWs.onopen=()=>{
-    setActiveInbox(peer);
-    loadConversations();
-  };
-  inboxWs.onmessage=e=>{
-    try{
-      const d=JSON.parse(e.data);
-      if(d.type==="inbox"){
-        renderConversations(d.conversations||[]);
-        // If a message arrives while this page is on another screen, keep the
-        // conversation list immediately visible without requiring a search.
-      }
-    }catch{}
-  };
-  inboxWs.onclose=()=>{if(me)setTimeout(connectInbox,1500)};
-  inboxWs.onerror=()=>{};
-}
-function setActiveInbox(peerNameValue){
-  if(!inboxWs||inboxWs.readyState!==WebSocket.OPEN)return;
-  inboxWs.send(JSON.stringify({type:"active",peer:peerNameValue||""}));
-}
-
-join.onclick=register;
-nameInput.addEventListener("keydown",e=>{if(e.key==="Enter")register()});
-
-search.addEventListener("input",async()=>{
-  const q=search.value.trim(); results.innerHTML=""; if(!q)return;
-  const r=await fetch("/api/search?q="+encodeURIComponent(q)); const d=await r.json();
-  for(const u of d.users||[]){
-    const b=document.createElement("button");b.className="result";b.textContent=u.name;
-    b.onclick=()=>selectUser(u.name);results.appendChild(b);
-  }
-});
-
-async function selectUser(name){
-  if(!name||name===me)return;
-  peer=name;
-  chatTitle.hidden=false;
-  chat.hidden=false;peerName.textContent=name;hint.textContent="در حال اتصال...";
-  results.innerHTML="";search.value="";messages.innerHTML="";
-  setActiveInbox(peer);
-  if(ws)try{ws.close()}catch{}
-  const proto=location.protocol==="https:"?"wss:":"ws:";
-  ws=new WebSocket(`${proto}//${location.host}/ws?me=${encodeURIComponent(me)}&peer=${encodeURIComponent(peer)}`);
-  // Sending is HTTP-based, so the other user and even this WebSocket do not
-  // need to be online. The WebSocket is only for live delivery.
-  text.disabled=false; send.disabled=false; text.focus();
-  ws.onopen=()=>{setStatus("متصل");hint.textContent="متصل؛ پیام‌ها ذخیره می‌شوند.";setActiveInbox(peer);};
-  ws.onmessage=e=>{try{const d=JSON.parse(e.data);if(d.type==="message")render(d)}catch{}};
-  ws.onerror=()=>{setStatus("آماده");hint.textContent="اتصال زنده برقرار نشد؛ ارسال پیام همچنان فعال است."};
-  ws.onclose=()=>{setStatus("آماده");hint.textContent="اتصال زنده قطع شد؛ ارسال پیام همچنان فعال است.";};
-  // The pair Durable Object owns the history, so this also works if the
-  // WebSocket takes a moment to connect.
-  try{
-    const hr=await fetch(`/api/history?me=${encodeURIComponent(me)}&peer=${encodeURIComponent(peer)}`);
-    const hd=await hr.json();
-    if(hd.ok){
-      messages.innerHTML="";
-      for(const m of hd.messages||[]) render(m);
-    }
-  }catch{}
-  loadConversations();
-}
-function render(m){
-  const div=document.createElement("div");div.className="msg"+(m.sender===me?" mine":"");
-  let html=`<div class="sender">${esc(m.sender)}</div>`;
-  if(m.text)html+=`<div>${esc(m.text)}</div>`;
-  if(m.media_url){
-    if((m.media_type||"").startsWith("video/"))html+=`<video controls preload="metadata" src="${esc(m.media_url)}"></video>`;
-    else if((m.media_type||"").startsWith("image/"))html+=`<img loading="lazy" src="${esc(m.media_url)}" alt="${esc(m.file_name||"عکس")}">`;
-    else html+=`<a href="${esc(m.media_url)}" target="_blank" rel="noopener">${esc(m.file_name||"فایل")}</a>`;
-  }
-  html+=`<div class="time">${time(m.created_at)}</div>`;div.innerHTML=html;messages.appendChild(div);messages.scrollTop=messages.scrollHeight;
-}
-let sending=false;
-form.addEventListener("submit",async e=>{
-  e.preventDefault();
-  const value=text.value.trim();
-  if(!me||!peer||(!value))return;
-  if(sending)return;
-  sending=true; send.disabled=true;
-  try{
-    const r=await fetch("/api/send",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({sender:me,peer,text:value})});
-    const d=await r.json();
-    if(!d.ok)throw new Error(d.error||"خطا");
-    text.value="";
-    // The WebSocket broadcasts the same message to every open chat tab.
-    // Render here only when the chat socket is not open, so offline sending
-    // still works and the message is immediately visible to the sender.
-    if(!ws||ws.readyState!==WebSocket.OPEN) render(d.message);
-  }catch(err){
-    alert(err.message||"ارسال پیام ناموفق بود");
-  }finally{
-    sending=false; send.disabled=false; text.focus();
-  }
-});
-back.onclick=()=>{peer="";setActiveInbox("");if(ws)try{ws.close()}catch{}ws=null;chatTitle.hidden=true;chat.hidden=true;peerName.textContent="یک نفر را انتخاب کن";hint.textContent="برای شروع، یک کاربر را انتخاب کن.";messages.innerHTML="";text.disabled=true;send.disabled=true;loadConversations()};
-
-avatarButton.onclick=()=>avatarFile.click();
-avatarFile.onchange=async()=>{
-  const f=avatarFile.files?.[0];if(!f)return;
-  if(!f.type.startsWith("image/"))return alert("فقط عکس انتخاب کن.");
-  const local=URL.createObjectURL(f);avatar.src=local;avatar.hidden=false;avatarText.hidden=true;
-  alert("عکس پروفایل انتخاب شد. برای ذخیره دائمی بین دستگاه‌ها، بخش Storage باید به یک فضای فایل مثل Supabase متصل شود.");
-};
-
-mediaFile.onchange=async()=>{
-  const f=mediaFile.files?.[0];if(!f)return;
-  if(!ws||ws.readyState!==WebSocket.OPEN){alert("اول وارد یک چت شو.");mediaFile.value="";return}
-  const local=URL.createObjectURL(f);
-  ws.send(JSON.stringify({type:"message",text:"",mediaUrl:local,mediaType:f.type,fileName:f.name}));
-  mediaFile.value="";
-};
-
-if(me){
-  nameInput.value=me;showMain();
-  try{const cached=JSON.parse(localStorage.getItem(inboxKey())||"null");if(Array.isArray(cached))renderConversations(cached)}catch{}
-  loadProfile();connectInbox();loadConversations()
-}
+const $=s=>document.querySelector(s), app=$('#app');
+const state={user:null,peer:null,ws:null,conversations:[],theme:localStorage.gbTheme||'blue'};
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=t=>new Date(t).toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit'});
+const avatar=u=>u?.avatar?`<div class="avatar"><img src="${esc(u.avatar)}"></div>`:`<div class="avatar">${esc((u?.name||'?').slice(0,1))}</div>`;
+function toast(x){const d=document.createElement('div');d.className='toast';d.textContent=x;document.body.appendChild(d);setTimeout(()=>d.remove(),2200)}
+async function api(path,opt={}){const r=await fetch(path,{credentials:'include',...opt,headers:{'content-type':'application/json',...(opt.headers||{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||'خطا');return d}
+function auth(){app.innerHTML=`<div class="auth"><div class="auth-card"><img class="logo" src="/favicon.svg"><h1>گوربا بتمن</h1><p>پیام‌رسان وب؛ بدون شماره تلفن</p><div id="authbox"></div></div></div>`;showLogin()}
+function showLogin(){ $('#authbox').innerHTML=`<div class="field"><label>نام کاربری</label><input id="u" placeholder="مثلاً pourya_1"></div><div class="field"><label>رمز عبور</label><input id="p" type="password" placeholder="حداقل ۶ کاراکتر"></div><button class="primary" id="go">ورود</button><div class="switch" id="sw">حساب ندارم؛ ثبت‌نام</div>`;$('#go').onclick=async()=>{try{const d=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('#u').value,password:$('#p').value})});state.user=d.user;start()}catch(e){toast(e.message)}};$('#sw').onclick=showRegister}
+function showRegister(){ $('#authbox').innerHTML=`<div class="field"><label>نام نمایشی</label><input id="n" placeholder="پوریا"></div><div class="field"><label>نام کاربری</label><input id="u" placeholder="pourya_1"></div><div class="field"><label>رمز عبور</label><input id="p" type="password" placeholder="حداقل ۶ کاراکتر"></div><button class="primary" id="go">ساخت حساب</button><div class="switch" id="sw">حساب دارم؛ ورود</div>`;$('#go').onclick=async()=>{try{const d=await api('/api/register',{method:'POST',body:JSON.stringify({name:$('#n').value,username:$('#u').value,password:$('#p').value})});state.user=d.user;start()}catch(e){toast(e.message)}};$('#sw').onclick=showLogin}
+async function start(){applyTheme();renderShell();await loadConversations();connectWS()}
+function renderShell(){app.innerHTML=`<div class="shell"><aside class="rail"><button class="active">💬</button><button>👥</button><button id="themeBtn">🎨</button><button id="logout">↪</button><div class="me">${avatar(state.user)}</div></aside><aside class="sidebar" id="sidebar"><div class="side-head"><h2>گفتگوها</h2><button class="iconbtn" id="newChat">✎</button></div><div class="search"><input id="search" placeholder="جستجوی افراد یا گفتگو..."></div><div class="chatlist" id="chatlist"></div></aside><main class="main" id="main"><div class="welcome"><div class="big">💬</div><h2>گوربا بتمن</h2><p>یک گفتگو را از لیست انتخاب کن یا گفتگوی جدید بساز.</p></div></main></div><div class="drawer" id="drawer"><div class="drawer-card"><button class="iconbtn" id="closeDrawer">×</button><h2>تم پیام‌رسان</h2><p>ظاهر برنامه را انتخاب کن.</p><div class="theme-grid"><div class="theme" data-t="blue" style="background:#229ed9"></div><div class="theme" data-t="purple" style="background:#7c5cff"></div><div class="theme" data-t="green" style="background:#22a06b"></div><div class="theme" data-t="orange" style="background:#f08c2e"></div><div class="theme" data-t="pink" style="background:#e2559a"></div><div class="theme" data-t="dark" style="background:#17212b"></div></div></div></div>`;$('#logout').onclick=async()=>{await api('/api/logout',{method:'POST'});location.reload()};$('#newChat').onclick=()=>searchUsers('');$('#themeBtn').onclick=()=>$('#drawer').classList.add('open');$('#closeDrawer').onclick=()=>$('#drawer').classList.remove('open');document.querySelectorAll('.theme').forEach(x=>x.onclick=()=>{state.theme=x.dataset.t;localStorage.gbTheme=state.theme;applyTheme()});$('#search').oninput=e=>searchUsers(e.target.value)}
+function applyTheme(){const map={blue:'#229ed9',purple:'#7c5cff',green:'#22a06b',orange:'#f08c2e',pink:'#e2559a',dark:'#4aa8d8'};document.documentElement.style.setProperty('--accent',map[state.theme]||map.blue);if(state.theme==='dark'){document.documentElement.style.setProperty('--bg','#0e1821');document.documentElement.style.setProperty('--panel','#17212b');document.documentElement.style.setProperty('--text','#eef4f8');document.documentElement.style.setProperty('--line','#2b3944');document.documentElement.style.setProperty('--bubble2','#22313c')}else{document.documentElement.style.setProperty('--bg','#eef5f9');document.documentElement.style.setProperty('--panel','#fff');document.documentElement.style.setProperty('--text','#17212b');document.documentElement.style.setProperty('--line','#e4ebf0');document.documentElement.style.setProperty('--bubble2','#fff')}}
+async function loadConversations(){try{state.conversations=(await api('/api/conversations')).conversations;renderList()}catch(e){toast(e.message)}}
+function renderList(){const box=$('#chatlist');if(!state.conversations.length){box.innerHTML='<div class="empty">هنوز گفتگویی نداری.<br>روی ✎ بزن و یک نفر را پیدا کن.</div>';return}box.innerHTML=state.conversations.map(c=>`<div class="chat ${state.peer?.id===c.peer.id?'active':''}" data-id="${c.peer.id}">${avatar(c.peer)}<div class="chat-main"><div class="chat-row"><span class="chat-name">${esc(c.peer.name)}</span><span class="time">${fmt(c.updated_at)}</span></div><div class="chat-row"><span class="preview">${esc(c.last_text||'📎')}</span>${c.unread?`<span class="badge">${c.unread}</span>`:''}</div></div></div>`).join('');box.querySelectorAll('.chat').forEach(x=>x.onclick=()=>openChat(x.dataset.id))}
+async function searchUsers(q){const box=$('#chatlist');if(!q){box.innerHTML='<div class="empty">نام یا نام کاربری را جستجو کن.</div>';return}try{const d=await api('/api/users?q='+encodeURIComponent(q));box.innerHTML=d.users.length?d.users.map(u=>`<div class="chat" data-id="${u.id}">${avatar(u)}<div class="chat-main"><div class="chat-name">${esc(u.name)}</div><div class="preview">@${esc(u.username)}</div></div></div>`).join(''):'<div class="empty">کاربری پیدا نشد.</div>';box.querySelectorAll('.chat').forEach(x=>x.onclick=()=>openChat(x.dataset.id))}catch(e){toast(e.message)}}
+async function openChat(peerId){const peer=state.conversations.find(c=>c.peer.id===peerId)?.peer || (await api('/api/users?q='+encodeURIComponent(peerId))).users?.find(x=>x.id===peerId);if(!peer){try{const r=await api('/api/history?peer='+encodeURIComponent(peerId));peer={id:peerId,name:'گفتگو',username:''};}catch{return}}state.peer=peer;renderChat();try{const d=await api('/api/history?peer='+encodeURIComponent(peerId));drawMessages(d.messages);await api('/api/seen',{method:'POST',body:JSON.stringify({peer:peerId})});await loadConversations()}catch(e){toast(e.message)}}
+function renderChat(){const m=$('#main');m.classList.add('mobile-show');$('#sidebar').classList.add('hide-mobile');m.innerHTML=`<div class="chat-head"><button class="iconbtn mobile-back">‹</button>${avatar(state.peer)}<div class="head-info"><div class="head-name">${esc(state.peer.name)}</div><div class="online">@${esc(state.peer.username||'کاربر')}</div></div></div><div class="messages" id="messages"></div><div class="composer"><button class="attach" id="attach">＋</button><textarea id="text" placeholder="پیام..."></textarea><button class="send" id="send">➤</button></div>`;$('.mobile-back').onclick=()=>{m.classList.remove('mobile-show');$('#sidebar').classList.remove('hide-mobile')};$('#send').onclick=send;$('#text').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}};$('#attach').onclick=()=>toast('ارسال رسانه در مرحله Storage فعال می‌شود')}
+function drawMessages(msgs){const box=$('#messages');if(!box)return;box.innerHTML=msgs.map(messageHTML).join('');box.scrollTop=box.scrollHeight}
+function messageHTML(x){return `<div class="msg ${x.sender_id===state.user.id?'mine':'theirs'}">${esc(x.text)}<small>${fmt(x.created_at)}${x.sender_id===state.user.id?(x.seen?' ✓✓':' ✓'):''}</small></div>`}
+async function send(){const t=$('#text');const text=t.value.trim();if(!text||!state.peer)return;const b={peerId:state.peer.id,text};t.value='';try{const d=await api('/api/send',{method:'POST',body:JSON.stringify(b)});$('#messages').insertAdjacentHTML('beforeend',messageHTML(d.message));$('#messages').scrollTop=$('#messages').scrollHeight;await loadConversations()}catch(e){t.value=text;toast(e.message)}}
+function connectWS(){try{const proto=location.protocol==='https:'?'wss':'ws';state.ws=new WebSocket(`${proto}://${location.host}/ws`);state.ws.onmessage=e=>{const d=JSON.parse(e.data);if(d.type==='message'){if(state.peer&&d.message.chat_key===keyFor(state.user.id,state.peer.id)){$('#messages')?.insertAdjacentHTML('beforeend',messageHTML(d.message));$('#messages').scrollTop=$('#messages').scrollHeight}loadConversations()}if(d.type==='conversation')loadConversations()};state.ws.onclose=()=>setTimeout(connectWS,2500)}catch{}}
+function keyFor(a,b){return [a,b].sort().join('::')}
+(async()=>{try{const d=await api('/api/me');state.user=d.user;start()}catch{auth()}})();
