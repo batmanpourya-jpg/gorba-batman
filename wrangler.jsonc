@@ -10,21 +10,21 @@
   "durable_objects": {
     "bindings": [
       {
-        "name": "MESSENGER",
-        "class_name": "Messenger"
+        "name": "DIRECTORY",
+        "class_name": "Directory"
+      },
+      {
+        "name": "INBOX",
+        "class_name": "UserInbox"
       }
     ]
   },
   "exports": {
-    "ChatRoom": {
+    "Directory": {
       "type": "durable-object",
       "storage": "sqlite"
     },
-    "Messenger": {
-      "type": "durable-object",
-      "storage": "sqlite"
-    },
-    "ChatRoomV2": {
+    "UserInbox": {
       "type": "durable-object",
       "storage": "sqlite"
     }

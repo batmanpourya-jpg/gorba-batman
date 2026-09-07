@@ -1,25 +1,27 @@
-# Gorba Batman — Phone OTP Update
+# Gorba Batman — rebuild
 
-این نسخه آیکون گربه‌ی ارسال‌شده را به عنوان favicon نگه می‌دارد و ورود/ساخت حساب را با شماره تلفن + کد SMS انجام می‌دهد.
+A clean rebuild of the web messenger core for Cloudflare Workers.
 
-## SMS واقعی
-برای اینکه کد واقعاً با پیامک ارسال شود، این نسخه از Twilio Verify استفاده می‌کند. در Cloudflare Worker سه Secret بساز:
+## Features
+- ID-only registration/login (no phone, no password)
+- Unique user IDs
+- Persistent user directory in SQLite Durable Object
+- Persistent per-user message inbox
+- Private 1-to-1 chats
+- Offline message delivery: messages are saved even if the recipient is not online
+- Automatic chat list
+- Realtime incoming messages with WebSocket Hibernation
+- Search users
+- Profile display-name editing
+- Dark/light theme
+- Cat favicon from the supplied image
 
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_AUTH_TOKEN`
-- `TWILIO_VERIFY_SERVICE_SID`
+## Deploy
+1. Replace the GitHub repository contents with this folder.
+2. Commit a new change.
+3. Cloudflare Workers Builds will deploy it.
 
-این مقادیر را داخل GitHub یا کد قرار نده؛ فقط به عنوان Secret/Environment Variable در Cloudflare ذخیره کن.
+This rebuild intentionally uses NEW Durable Object class names (`Directory` and `UserInbox`) and the modern `exports` configuration. It does not depend on the old ChatRoom/ChatRoomV2 namespaces.
 
-Twilio Verify خودش کد را تولید و اعتبارسنجی می‌کند؛ Worker فقط درخواست ارسال و بررسی را به API آن می‌فرستد.
-
-اگر این Secretها تنظیم نشده باشند، برنامه پیامک جعلی یا کد ساختگی نشان نمی‌دهد و به‌صورت واضح می‌گوید تنظیمات SMS کامل نشده است.
-
-## Cloudflare
-فایل‌های پروژه را در GitHub جایگزین کن و یک Commit جدید بزن. سپس Build جدید Cloudflare را صبر کن.
-
-## Favicon
-`public/favicon.jpg` همان عکس گربه‌ی ارسالی است و در `<link rel="icon">` استفاده می‌شود.
-
-## نکته درباره حساب‌های قدیمی
-ورود با نام کاربری/رمز قدیمی همچنان در API سرور وجود دارد، اما رابط کاربری جدید ورود را با شماره + OTP انجام می‌دهد. حساب‌های قدیمی که شماره تلفن ندارند با OTP وارد نمی‌شوند تا شماره‌شان به‌صورت امن به حساب متصل شود.
+## Important
+ID-only login is intentionally simple for a private friends-only test. Anyone who knows an ID can sign in as that ID. Do not use it for sensitive/private accounts.
