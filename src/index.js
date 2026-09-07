@@ -188,3 +188,11 @@ export class UserInbox extends DurableObject {
     return {ok:true};
   }
 }
+
+
+// Compatibility exports for Durable Object namespaces already provisioned
+// on the existing gorba-batman Worker. These keep old namespaces declared
+// during the rebuild while all new app traffic uses Directory/UserInbox.
+export class ChatRoom extends UserInbox {}
+export class ChatRoomV2 extends UserInbox {}
+export class Messenger extends UserInbox {}

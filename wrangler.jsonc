@@ -20,6 +20,18 @@
     ]
   },
   "exports": {
+    "ChatRoom": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "ChatRoomV2": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "Messenger": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
     "Directory": {
       "type": "durable-object",
       "storage": "sqlite"
