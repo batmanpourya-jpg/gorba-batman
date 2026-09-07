@@ -125,3 +125,6 @@ export class Messenger {
   }
   webSocketClose(ws){ try{ws.close();}catch{} }
 }
+
+// Compatibility export for the Durable Object namespace that this Worker already had.
+export { Messenger as ChatRoom };
