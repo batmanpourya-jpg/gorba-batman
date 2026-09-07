@@ -1,108 +1,188 @@
 import { DurableObject } from "cloudflare:workers";
 
-function normalizeName(name){return String(name||"").trim().slice(0,40)}
-function lowerName(name){return normalizeName(name).toLocaleLowerCase("fa-IR")}
-function pairRoomName(a,b){return [normalizeName(a),normalizeName(b)].filter(Boolean).sort((x,y)=>lowerName(x).localeCompare(lowerName(y),"fa")).join("::")}
-function json(data,status=200,extra={}){return Response.json(data,{status,headers:{"Cache-Control":"no-store",...extra}})}
-function cookie(name,value,maxAge=2592000){return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`}
-function getCookie(request,name){const raw=request.headers.get("Cookie")||"";const p=raw.split(";").map(x=>x.trim()).find(x=>x.startsWith(name+"="));return p?decodeURIComponent(p.slice(name.length+1)):""}
+const MAX_NAME = 40;
+const MAX_TEXT = 2000;
 
-export class ChatRoom extends DurableObject{
-  async fetch(request){
-    const url=new URL(request.url);
-
-    if(url.pathname==="/api/register"&&request.method==="POST"){
-      try{const body=await request.json();const name=normalizeName(body.name);if(!name)return json({ok:false,error:"نام وارد نشده"},400);
-        const key="user:"+lowerName(name);const existing=await this.ctx.storage.get(key);
-        if(!existing)await this.ctx.storage.put(key,{name,createdAt:Date.now()});
-        return json({ok:true,name});
-      }catch{return json({ok:false,error:"درخواست نامعتبر است"},400)}
-    }
-
-    if(url.pathname==="/api/search"&&request.method==="GET"){
-      const q=lowerName(url.searchParams.get("q")||"");if(!q)return json({ok:true,users:[]});
-      const entries=await this.ctx.storage.list({prefix:"user:"});const users=[];
-      for(const value of entries.values())if(value?.name&&lowerName(value.name).includes(q))users.push(value.name);
-      users.sort((a,b)=>a.localeCompare(b,"fa"));return json({ok:true,users:users.slice(0,20)});
-    }
-
-    if(url.pathname==="/api/google-login"&&request.method==="POST"){
-      try{
-        const body=await request.json();const credential=String(body.credential||"");
-        if(!credential||!this.env.GOOGLE_CLIENT_ID)return json({ok:false,error:"Google login تنظیم نشده است"},503);
-        const tr=await fetch("https://oauth2.googleapis.com/tokeninfo?id_token="+encodeURIComponent(credential));
-        if(!tr.ok)return json({ok:false,error:"اعتبار Google معتبر نیست"},401);
-        const token=await tr.json();
-        if(token.aud!==this.env.GOOGLE_CLIENT_ID||!token.sub)return json({ok:false,error:"Google account قابل تأیید نیست"},401);
-        const name=normalizeName(token.name||token.email?.split("@")[0]||"کاربر");
-        const userId="google:"+token.sub,sessionId=crypto.randomUUID();
-        const user={id:userId,name,email:token.email||"",picture:token.picture||"",updatedAt:Date.now()};
-        await this.ctx.storage.put(userId,user);
-        await this.ctx.storage.put("session:"+sessionId,{userId,createdAt:Date.now()},{expirationTtl:2592000});
-        return json({ok:true,user},200,{"Set-Cookie":cookie("gb_session",sessionId)});
-      }catch(e){console.error(e);return json({ok:false,error:"ورود با Google انجام نشد"},500)}
-    }
-
-    if(url.pathname==="/api/me"&&request.method==="GET"){
-      const s=getCookie(request,"gb_session");if(!s)return json({ok:false},401);
-      const session=await this.ctx.storage.get("session:"+s);if(!session?.userId)return json({ok:false},401);
-      const user=await this.ctx.storage.get(session.userId);if(!user)return json({ok:false},401);
-      return json({ok:true,user});
-    }
-
-    if(url.pathname==="/api/profile"&&request.method==="POST"){
-      const s=getCookie(request,"gb_session");const session=s?await this.ctx.storage.get("session:"+s):null;
-      if(!session?.userId)return json({ok:false,error:"وارد نشده‌اید"},401);
-      try{
-        const body=await request.json(),user=await this.ctx.storage.get(session.userId);
-        if(!user)return json({ok:false,error:"کاربر پیدا نشد"},404);
-        const name=normalizeName(body.name||user.name);if(!name)return json({ok:false,error:"نام نامعتبر است"},400);
-        const updated={...user,name,picture:String(body.picture||user.picture||"").slice(0,10000000),updatedAt:Date.now()};
-        await this.ctx.storage.put(session.userId,updated);return json({ok:true,user:updated});
-      }catch{return json({ok:false,error:"اطلاعات پروفایل نامعتبر است"},400)}
-    }
-
-    if(url.pathname!=="/ws")return new Response("Not found",{status:404});
-    if(request.headers.get("Upgrade")?.toLowerCase()!=="websocket")return new Response("WebSocket required",{status:426});
-    const me=normalizeName(url.searchParams.get("me")),peer=normalizeName(url.searchParams.get("peer"));
-    if(!me||!peer||lowerName(me)===lowerName(peer))return new Response("Two different users are required",{status:400});
-    const pair=new WebSocketPair(),[client,server]=Object.values(pair);
-    this.ctx.acceptWebSocket(server);server.serializeAttachment({me,peer});
-    return new Response(null,{status:101,webSocket:client});
-  }
-
-  async webSocketMessage(ws,message){
-    let data;try{data=typeof message==="string"?JSON.parse(message):null}catch{return}
-    if(!data||data.type!=="message")return;
-    const session=ws.deserializeAttachment()||{},text=String(data.text||"").trim().slice(0,2000);if(!text)return;
-    const payload=JSON.stringify({type:"message",id:crypto.randomUUID(),name:normalizeName(session.me),text,createdAt:Date.now()});
-    for(const client of this.ctx.getWebSockets())if(client.readyState===WebSocket.OPEN)try{client.send(payload)}catch{}
-  }
-  async webSocketClose(ws,code,reason){try{ws.close(code,reason)}catch{}}
-  async webSocketError(ws,error){console.error("WebSocket error",error)}
+function cleanName(v) { return String(v || "").trim().slice(0, MAX_NAME); }
+function lower(v) { return cleanName(v).toLocaleLowerCase("fa-IR"); }
+function roomKey(a,b) {
+  return [cleanName(a), cleanName(b)].sort((x,y)=>lower(x).localeCompare(lower(y),"fa")).join("::");
+}
+function out(data, status=200) {
+  return Response.json(data, { status, headers: { "Cache-Control": "no-store" }});
 }
 
-export default {async fetch(request,env){
-  const url=new URL(request.url);
-  if(url.pathname==="/api/config")return json({ok:true,clientId:env.GOOGLE_CLIENT_ID||""});
-  if(["/api/register","/api/search","/api/google-login","/api/me","/api/profile"].includes(url.pathname)){
-    return env.CHAT.get(env.CHAT.idFromName("users")).fetch(request);
+export class ChatRoom extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.sql = ctx.storage.sql;
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        name TEXT PRIMARY KEY,
+        name_lc TEXT NOT NULL,
+        avatar_url TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS users_name_lc ON users(name_lc);
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        sender TEXT NOT NULL,
+        text TEXT,
+        media_url TEXT,
+        media_type TEXT,
+        file_name TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS messages_created_at ON messages(created_at);
+    `);
   }
-  if(url.pathname==="/api/media"&&request.method==="POST"){
-    if(!env.MEDIA)return json({ok:false,error:"R2 تنظیم نشده است"},503);
-    if(!getCookie(request,"gb_session"))return json({ok:false,error:"ابتدا با Google وارد شوید"},401);
-    const type=request.headers.get("Content-Type")||"application/octet-stream",len=Number(request.headers.get("Content-Length")||0);
-    if(len>50*1024*1024)return json({ok:false,error:"حجم فایل بیشتر از 50MB است"},413);
-    const id=crypto.randomUUID(),ext=type.includes("video")?"mp4":type.includes("png")?"png":type.includes("webp")?"webp":"jpg",key=`media/${id}.${ext}`;
-    await env.MEDIA.put(key,request.body,{httpMetadata:{contentType:type}});return json({ok:true,key});
+
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/api/register" && request.method === "POST") {
+      try {
+        const body = await request.json();
+        const name = cleanName(body.name);
+        if (!name) return out({ok:false,error:"نام وارد نشده"},400);
+        const now = Date.now();
+        this.sql.exec(
+          `INSERT INTO users(name,name_lc,created_at,updated_at)
+           VALUES(?,?,?,?)
+           ON CONFLICT(name) DO UPDATE SET updated_at=excluded.updated_at`,
+          name, lower(name), now, now
+        );
+        return out({ok:true,name});
+      } catch(e) { return out({ok:false,error:"درخواست نامعتبر است"},400); }
+    }
+
+    if (url.pathname === "/api/search" && request.method === "GET") {
+      const q = lower(url.searchParams.get("q") || "");
+      if (!q) return out({ok:true,users:[]});
+      const rows = this.sql.exec(
+        `SELECT name, avatar_url FROM users WHERE name_lc LIKE ? ORDER BY name_lc LIMIT 20`,
+        `%${q}%`
+      ).toArray();
+      return out({ok:true,users:rows});
+    }
+
+    if (url.pathname === "/api/profile" && request.method === "GET") {
+      const name = cleanName(url.searchParams.get("name"));
+      const row = this.sql.exec(`SELECT name,avatar_url FROM users WHERE name=?`, name).toArray()[0];
+      return out({ok:true,user:row || {name,avatar_url:null}});
+    }
+
+    if (url.pathname === "/api/profile" && request.method === "POST") {
+      try {
+        const body = await request.json();
+        const name = cleanName(body.name);
+        const avatarUrl = String(body.avatarUrl || "").slice(0, 2000);
+        if (!name) return out({ok:false,error:"نام وارد نشده"},400);
+        const now = Date.now();
+        this.sql.exec(
+          `INSERT INTO users(name,name_lc,avatar_url,created_at,updated_at)
+           VALUES(?,?,?,?,?)
+           ON CONFLICT(name) DO UPDATE SET avatar_url=excluded.avatar_url,updated_at=excluded.updated_at`,
+          name, lower(name), avatarUrl || null, now, now
+        );
+        return out({ok:true,name,avatarUrl:avatarUrl||null});
+      } catch { return out({ok:false,error:"درخواست نامعتبر است"},400); }
+    }
+
+    if (url.pathname === "/api/history" && request.method === "GET") {
+      const rows = this.sql.exec(
+        `SELECT id,sender,text,media_url,media_type,file_name,created_at
+         FROM messages ORDER BY created_at DESC LIMIT 100`
+      ).toArray().reverse();
+      return out({ok:true,messages:rows});
+    }
+
+    if (url.pathname === "/ws") {
+      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
+        return new Response("WebSocket required",{status:426});
+
+      const me = cleanName(url.searchParams.get("me"));
+      const peer = cleanName(url.searchParams.get("peer"));
+      if (!me || !peer || lower(me)===lower(peer))
+        return new Response("Two different users are required",{status:400});
+
+      const pair = new WebSocketPair();
+      const [client,server] = Object.values(pair);
+      this.ctx.acceptWebSocket(server);
+      server.serializeAttachment({me,peer});
+
+      const history = this.sql.exec(
+        `SELECT id,sender,text,media_url,media_type,file_name,created_at
+         FROM messages ORDER BY created_at DESC LIMIT 100`
+      ).toArray().reverse();
+
+      for (const m of history) {
+        if (server.readyState === WebSocket.OPEN) server.send(JSON.stringify({type:"message",...m}));
+      }
+      return new Response(null,{status:101,webSocket:client});
+    }
+    return new Response("Not found",{status:404});
   }
-  if(url.pathname==="/media"){
-    if(!env.MEDIA)return new Response("R2 not configured",{status:503});const key=url.searchParams.get("key");if(!key)return new Response("Missing key",{status:400});
-    const obj=await env.MEDIA.get(key);if(!obj)return new Response("Not found",{status:404});const headers=new Headers();obj.writeHttpMetadata(headers);headers.set("etag",obj.httpEtag);return new Response(obj.body,{headers});
+
+  async webSocketMessage(ws, message) {
+    let data;
+    try { data = typeof message==="string" ? JSON.parse(message) : null; } catch { return; }
+    if (!data || !["message","media"].includes(data.type)) return;
+
+    const session = ws.deserializeAttachment() || {};
+    const sender = cleanName(session.me);
+    if (!sender) return;
+
+    const text = String(data.text||"").trim().slice(0,MAX_TEXT);
+    const mediaUrl = String(data.mediaUrl||"").slice(0,4000);
+    const mediaType = String(data.mediaType||"").slice(0,100);
+    const fileName = String(data.fileName||"").slice(0,180);
+    if (!text && !mediaUrl) return;
+
+    const row = {
+      id: crypto.randomUUID(),
+      sender,
+      text: text || null,
+      media_url: mediaUrl || null,
+      media_type: mediaType || null,
+      file_name: fileName || null,
+      created_at: Date.now()
+    };
+
+    this.sql.exec(
+      `INSERT INTO messages(id,sender,text,media_url,media_type,file_name,created_at)
+       VALUES(?,?,?,?,?,?,?)`,
+      row.id,row.sender,row.text,row.media_url,row.media_type,row.file_name,row.created_at
+    );
+
+    const payload = JSON.stringify({type:"message",...row});
+    for (const client of this.ctx.getWebSockets()) {
+      if (client.readyState===WebSocket.OPEN) {
+        try { client.send(payload); } catch {}
+      }
+    }
   }
-  if(url.pathname==="/ws"){
-    const me=normalizeName(url.searchParams.get("me")),peer=normalizeName(url.searchParams.get("peer"));if(!me||!peer)return new Response("Missing users",{status:400});
-    return env.CHAT.get(env.CHAT.idFromName(pairRoomName(me,peer))).fetch(request);
+
+  async webSocketClose(ws, code, reason) {
+    try { ws.close(code, reason); } catch {}
   }
-  return env.ASSETS.fetch(request);
-}};
+  async webSocketError(ws, error) { console.error("WebSocket error",error); }
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/api/") || url.pathname==="/ws") {
+      const me = cleanName(url.searchParams.get("me"));
+      const peer = cleanName(url.searchParams.get("peer"));
+      let room = "users";
+      if (url.pathname==="/ws") {
+        if (!me || !peer) return new Response("Missing users",{status:400});
+        room = roomKey(me,peer);
+      }
+      return env.CHAT.get(env.CHAT.idFromName(room)).fetch(request);
+    }
+    return env.ASSETS.fetch(request);
+  }
+};
