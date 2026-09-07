@@ -1,0 +1,1 @@
+{"name":"gorba-batman","private":true,"version":"1.2.0","scripts":{"deploy":"wrangler deploy","dev":"wrangler dev"},"devDependencies":{"wrangler":"^4.30.0"}}

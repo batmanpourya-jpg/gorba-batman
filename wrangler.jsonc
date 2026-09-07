@@ -2,23 +2,10 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "gorba-batman",
   "main": "src/index.js",
-  "compatibility_date": "2026-09-05",
-  "assets": {
-    "directory": "./public",
-    "binding": "ASSETS"
-  },
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "CHAT",
-        "class_name": "ChatRoom"
-      }
-    ]
-  },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["ChatRoom"]
-    }
-  ]
+  "compatibility_date": "2026-09-07",
+  "assets": {"directory": "./public", "binding": "ASSETS"},
+  "durable_objects": {"bindings": [{"name": "CHAT", "class_name": "ChatRoom"}]},
+  "r2_buckets": [{"binding": "MEDIA", "bucket_name": "gorba-batman-media"}],
+  "vars": {"GOOGLE_CLIENT_ID": "PASTE_YOUR_GOOGLE_CLIENT_ID_HERE"},
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["ChatRoom"]}]
 }
