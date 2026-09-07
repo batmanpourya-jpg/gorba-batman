@@ -1,4 +1,6 @@
-# گوربا بتمن v2
+# گوربا بتمن v2 — fixed
+
+**رفع خطای migration:** چون کلاس قدیمی `ChatRoom` قبلاً روی Worker ساخته شده بود، Cloudflare اجازه تبدیل همان کلاس به SQLite را نمی‌دهد. این نسخه یک کلاس SQLite جدید به نام `ChatRoomV2` می‌سازد و migration قبلی `v1` را هم نگه می‌دارد.
 
 این نسخه:
 - WebSocket چت را با Durable Object Hibernation استفاده می‌کند.

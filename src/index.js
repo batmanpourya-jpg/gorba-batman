@@ -12,7 +12,7 @@ function out(data, status=200) {
   return Response.json(data, { status, headers: { "Cache-Control": "no-store" }});
 }
 
-export class ChatRoom extends DurableObject {
+export class ChatRoomV2 extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
