@@ -1,27 +1,16 @@
-# Gorba Batman — rebuild
+# گوربا بتمن — نسخه تنظیمات و عکس پروفایل
 
-A clean rebuild of the web messenger core for Cloudflare Workers.
+این نسخه روی همان معماری قبلی ساخته شده و این موارد را اضافه/اصلاح می‌کند:
 
-## Features
-- ID-only registration/login (no phone, no password)
-- Unique user IDs
-- Persistent user directory in SQLite Durable Object
-- Persistent per-user message inbox
-- Private 1-to-1 chats
-- Offline message delivery: messages are saved even if the recipient is not online
-- Automatic chat list
-- Realtime incoming messages with WebSocket Hibernation
-- Search users
-- Profile display-name editing
-- Dark/light theme
-- Cat favicon from the supplied image
+- صفحه تنظیمات تیره و راست‌چین، با چیدمان نزدیک به نمونه‌ای که خواسته شد.
+- ویرایش نام نمایشی و بخش «درباره».
+- انتخاب عکس پروفایل از فایل‌های دستگاه.
+- انتخاب عکس پس‌زمینه/کاور پروفایل.
+- فشرده‌سازی عکس در مرورگر قبل از ارسال، برای جلوگیری از حجم زیاد.
+- ذخیره دائمی avatar و cover در SQLite Durable Object.
+- نمایش عکس پروفایل در جستجو و لیست گفتگوها.
+- حفظ کلاس‌های قدیمی `ChatRoom`، `ChatRoomV2` و `Messenger` برای جلوگیری از خطای orphaned provisioned namespace.
 
-## Deploy
-1. Replace the GitHub repository contents with this folder.
-2. Commit a new change.
-3. Cloudflare Workers Builds will deploy it.
+بعد از جایگزینی فایل‌ها در GitHub، Deploy را انجام بده و سپس `Ctrl + F5` بزن تا نسخه جدید `app.js` از کش قدیمی استفاده نشود.
 
-This rebuild intentionally uses NEW Durable Object class names (`Directory` and `UserInbox`) and the modern `exports` configuration. It does not depend on the old ChatRoom/ChatRoomV2 namespaces.
-
-## Important
-ID-only login is intentionally simple for a private friends-only test. Anyone who knows an ID can sign in as that ID. Do not use it for sensitive/private accounts.
+نکته: عکس‌ها به‌صورت فشرده‌شده در ذخیره‌سازی حساب ذخیره می‌شوند. برای این نسخه بهتر است عکس‌های خیلی بزرگ انتخاب نشوند.
