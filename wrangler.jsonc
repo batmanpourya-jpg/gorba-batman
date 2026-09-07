@@ -3,10 +3,16 @@
   "name": "gorba-batman",
   "main": "src/index.js",
   "compatibility_date": "2026-09-07",
-  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
   "durable_objects": {
     "bindings": [
-      { "name": "MESSENGER", "class_name": "Messenger" }
+      {
+        "name": "MESSENGER",
+        "class_name": "Messenger"
+      }
     ]
   },
   "exports": {
@@ -15,6 +21,10 @@
       "storage": "sqlite"
     },
     "Messenger": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "ChatRoomV2": {
       "type": "durable-object",
       "storage": "sqlite"
     }

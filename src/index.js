@@ -128,3 +128,4 @@ export class Messenger {
 
 // Compatibility export for the Durable Object namespace that this Worker already had.
 export { Messenger as ChatRoom };
+export { Messenger as ChatRoomV2 };
