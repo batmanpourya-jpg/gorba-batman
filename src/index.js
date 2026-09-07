@@ -6,7 +6,7 @@ const json = (data, status = 200) =>
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
   });
 
-const cleanId = (v) => String(v || "").trim().toLowerCase().replace(/^@/, "");
+const cleanId = (v) => String(v ?? "").trim().replace(/^@+/, "").toLowerCase();
 const cleanName = (v) => String(v || "").trim().replace(/\s+/g, " ").slice(0, 40);
 const cleanBio = (v) => String(v || "").trim().replace(/\s+/g, " ").slice(0, 80);
 const cleanImage = (v, max = 700000) => {
@@ -43,7 +43,7 @@ async function api(request, env, path) {
   if (method==="POST" && path==="/api/register") {
     const b=await request.json();
     const id=cleanId(b.id), name=cleanName(b.name);
-    if (!/^[a-z0-9_]{3,24}$/.test(id)) return json({ok:false,error:"BAD_ID",message:"ID باید ۳ تا ۲۴ کاراکتر و فقط شامل حروف انگلیسی، عدد و _ باشد."},400);
+    if (!/^[a-z0-9_]{3,24}$/.test(id)) return json({ok:false,error:"BAD_ID",message:"ID باید ۳ تا ۲۴ کاراکتر و فقط شامل حروف انگلیسی، عدد و _ باشد؛ مثل pourya_123."},400);
     if (name.length<2) return json({ok:false,error:"BAD_NAME",message:"نام نمایشی را وارد کن."},400);
     const stub=env.DIRECTORY.getByName("directory");
     const r=await stub.registerUser(id,name);
