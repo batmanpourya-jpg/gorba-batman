@@ -1,11 +1,11 @@
 <!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>گوربا بتمن</title><link rel="icon" type="image/jpeg" href="/favicon.jpg"><link rel="stylesheet" href="/style.css"></head><body>
 <div id="toast"></div>
-<section id="auth" class="auth-screen"><div class="auth-card"><img src="/favicon.jpg" class="logo" alt="گربه"><h1>گوربا بتمن</h1><p class="muted">پیام‌رسان دوستانه‌ی شما</p><div id="loginBox"><label>ID خودت</label><div class="id-input"><span>@</span><input id="loginId" autocomplete="username" placeholder="your_id"></div><button class="primary full" onclick="login()">ورود</button><button class="link full" onclick="showRegister()">حساب جدید می‌سازم</button></div><div id="registerBox" hidden><label>نام نمایشی</label><input id="regName" placeholder="مثلاً پوریا"><label>ID یکتا</label><div class="id-input"><span>@</span><input id="regId" placeholder="pourya_123"></div><small class="muted">۳ تا ۲۴ کاراکتر: حروف انگلیسی، عدد و _</small><button class="primary full" onclick="register()">ساخت حساب</button><button class="link full" onclick="showLogin()">قبلاً حساب دارم</button></div><p class="tiny">ورود این نسخه با ID انجام می‌شود؛ برای استفاده دوستانه طراحی شده است.</p></div></section>
+<section id="auth" class="auth-screen"><div class="auth-card"><img src="/favicon.jpg" class="logo" alt="گربه"><h1>گوربا بتمن</h1><p class="muted">فقط اسمت رو وارد کن و وارد شو</p><div id="loginBox"><label>نام نمایشی</label><input id="loginName" autocomplete="name" placeholder="مثلاً پوریا" maxlength="40" onkeydown="if(event.key==='Enter') enterByName()"><small class="muted">همین نام برای ورود به حسابت استفاده می‌شود.</small><button class="primary full" onclick="enterByName()">ورود</button></div><p class="tiny">دیگه لازم نیست ID یا شماره تلفن وارد کنی.</p></div></section>
 <section id="app" hidden>
   <header class="topbar"><div class="brand"><img src="/favicon.jpg"><strong>گوربا بتمن</strong></div><div class="top-actions"><button title="حالت شب" onclick="toggleTheme()">◐</button><button title="تنظیمات" onclick="openSettings()">☰</button></div></header>
   <div class="layout">
     <aside class="sidebar">
-      <div class="me-card" onclick="openSettings()"><div id="meAvatar" class="avatar"></div><div class="me-info"><b id="meName"></b><span id="meId"></span></div><span class="me-arrow">‹</span></div>
+      <div class="me-card" onclick="openSettings()"><div id="meAvatar" class="avatar"></div><div class="me-info"><b id="meName"></b><span>حساب شخصی</span></div><span class="me-arrow">‹</span></div>
       <div class="search"><span>⌕</span><input id="search" placeholder="جستجو" oninput="searchUsers()"></div>
       <div id="searchResults" class="search-results"></div>
       <div class="tabs"><button class="tab active" data-tab="all">همه</button><button class="tab" data-tab="personal">شخصی</button><button class="tab" data-tab="groups">گروه‌ها</button></div>
@@ -14,7 +14,7 @@
     </aside>
     <main class="chat-pane">
       <div id="emptyChat" class="empty-chat"><div class="empty-logo">🐱</div><h2>گوربا بتمن</h2><p>یک گفتگو را از فهرست انتخاب کن</p></div>
-      <div id="chatView" hidden><div class="chat-head"><button class="back" onclick="closeChat()">→</button><div id="peerAvatar" class="avatar"></div><div class="peer-title"><b id="peerName"></b><span id="peerId"></span></div><button class="chat-more">⋮</button></div><div id="messages" class="messages"></div><form class="composer" onsubmit="sendMessage(event)"><button type="button" class="attach" onclick="toast('ارسال عکس و ویدیو در مرحله بعد فعال می‌شود')">＋</button><input id="message" autocomplete="off" placeholder="پیام..."/><button id="sendBtn" class="send">➤</button></form></div>
+      <div id="chatView" hidden><div class="chat-head"><button class="back" onclick="closeChat()">→</button><div id="peerAvatar" class="avatar"></div><div class="peer-title"><b id="peerName"></b><span>گفتگوی خصوصی</span></div><button class="chat-more">⋮</button></div><div id="messages" class="messages"></div><form class="composer" onsubmit="sendMessage(event)"><button type="button" class="attach" onclick="toast('ارسال عکس و ویدیو در مرحله بعد فعال می‌شود')">＋</button><input id="message" autocomplete="off" placeholder="پیام..."/><button id="sendBtn" class="send">➤</button></form></div>
     </main>
   </div>
 </section>
@@ -22,7 +22,7 @@
   <div class="settings-head"><button onclick="closeSettings()">→</button><h2>تنظیمات</h2><button class="dots" onclick="toast('گزینه‌های بیشتر به‌زودی')">⋮</button></div>
   <div class="settings-body">
     <div id="settingsCover" class="cover"><label class="cover-camera" for="coverInput">📷</label><input id="coverInput" type="file" accept="image/*" hidden></div>
-    <div class="settings-profile"><label class="settings-avatar-wrap" for="avatarInput"><div id="profileAvatar" class="big-avatar"></div><span>📷</span></label><input id="avatarInput" type="file" accept="image/*" hidden><div id="settingsName" class="settings-display-name"></div><div id="settingsId" class="settings-id"></div><div class="online-dot">● آنلاین</div></div>
+    <div class="settings-profile"><label class="settings-avatar-wrap" for="avatarInput"><div id="profileAvatar" class="big-avatar"></div><span>📷</span></label><input id="avatarInput" type="file" accept="image/*" hidden><div id="settingsName" class="settings-display-name"></div><div class="online-dot">● آنلاین</div></div>
     <div class="profile-fields">
       <label>نام نمایشی</label><div class="setting-input"><input id="settingsNameInput"><span>✎</span></div>
       <label>درباره</label><div class="setting-input"><input id="settingsBioInput" maxlength="80" placeholder="یک جمله درباره خودت"><span>✎</span></div>
@@ -37,4 +37,4 @@
     <button class="logout-setting" onclick="logout()">خروج از حساب</button><div class="settings-note">گوربا بتمن • نسخه دوستانه</div>
   </div>
 </div>
-<script src="/app.js?v=20260907-rubika-style-4"></script></body></html>
+<script src="/app.js?v=20260907-name-only-1"></script></body></html>

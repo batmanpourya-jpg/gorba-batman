@@ -6,7 +6,7 @@ const json = (data, status = 200) =>
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
   });
 
-const cleanId = (v) => String(v ?? "").trim().replace(/^@+/, "").toLowerCase();
+const cleanId = (v) => String(v || "").trim().toLowerCase().replace(/^@/, "");
 const cleanName = (v) => String(v || "").trim().replace(/\s+/g, " ").slice(0, 40);
 const cleanBio = (v) => String(v || "").trim().replace(/\s+/g, " ").slice(0, 80);
 const cleanImage = (v, max = 700000) => {
@@ -40,22 +40,16 @@ export default {
 
 async function api(request, env, path) {
   const method=request.method;
-  if (method==="POST" && path==="/api/register") {
-    const b=await request.json();
-    const id=cleanId(b.id), name=cleanName(b.name);
-    if (!/^[a-z0-9_]{3,24}$/.test(id)) return json({ok:false,error:"BAD_ID",message:"ID باید ۳ تا ۲۴ کاراکتر و فقط شامل حروف انگلیسی، عدد و _ باشد؛ مثل pourya_123."},400);
+  if (method==="POST" && (path==="/api/enter" || path==="/api/register" || path==="/api/login")) {
+    const b=await request.json().catch(()=>({}));
+    const name=cleanName(b?.name);
     if (name.length<2) return json({ok:false,error:"BAD_NAME",message:"نام نمایشی را وارد کن."},400);
     const stub=env.DIRECTORY.getByName("directory");
+    const existing=await stub.getUserByName(name);
+    if(existing) return json({ok:true,user:existing,existing:true});
+    const id=crypto.randomUUID().replace(/-/g,"").slice(0,24);
     const r=await stub.registerUser(id,name);
-    if (!r.ok) return json(r,409);
-    return json(r);
-  }
-  if (method==="POST" && path==="/api/login") {
-    const b=await request.json(), id=cleanId(b.id);
-    if (!id) return json({ok:false,error:"BAD_ID"},400);
-    const stub=env.DIRECTORY.getByName("directory");
-    const u=await stub.getUser(id);
-    return u ? json({ok:true,user:u}) : json({ok:false,error:"NOT_FOUND",message:"این ID ثبت نشده است."},404);
+    return json(r,r.ok?200:409);
   }
   if (method==="GET" && path==="/api/user") {
     const id=cleanId(new URL(request.url).searchParams.get("id"));
@@ -128,6 +122,10 @@ export class Directory extends DurableObject {
     if(exists) return {ok:false,error:"ID_TAKEN",message:"این ID قبلاً استفاده شده است."};
     this.sql.exec(`INSERT INTO users(id,name,avatar,created_at) VALUES(?1,?2,'',?3)`,id,name,now());
     return {ok:true,user:{id,name,avatar:"",bio:"",cover:""}};
+  }
+  async getUserByName(name){
+    const n=cleanName(name);
+    return this.sql.exec(`SELECT id,name,avatar,bio,cover FROM users WHERE lower(name)=lower(?1) ORDER BY created_at ASC LIMIT 1`,n).one() || null;
   }
   async getUser(id){ return this.sql.exec(`SELECT id,name,avatar,bio,cover FROM users WHERE id=?1`,cleanId(id)).one() || null; }
   async searchUsers(q){
