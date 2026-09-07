@@ -1,5 +1,10 @@
 const $=id=>document.getElementById(id);
-let me=JSON.parse(localStorage.getItem("gb_me")||"null");
+let me=null;
+try {
+  const saved=JSON.parse(localStorage.getItem("gb_me")||"null");
+  if(saved && typeof saved === "object" && typeof saved.id === "string" && saved.id.trim()) me=saved;
+  else localStorage.removeItem("gb_me");
+} catch { localStorage.removeItem("gb_me"); }
 let current=null, ws=null, chats=[];
 const api=async(path,opt={})=>{
   const r=await fetch(path,{headers:{"content-type":"application/json"},...opt});
@@ -20,9 +25,15 @@ async function login(){
   try{const d=await api("/api/login",{method:"POST",body:JSON.stringify({id})});me=d.user;saveMe();startApp()}
   catch(e){toast(e.message)}
 }
-function saveMe(){localStorage.setItem("gb_me",JSON.stringify(me))}
+function saveMe(){
+  if(me && me.id) localStorage.setItem("gb_me",JSON.stringify(me));
+  else localStorage.removeItem("gb_me");
+}
 async function startApp(){
-  if(!me)return;
+  if(!me || !me.id){
+    me=null; localStorage.removeItem("gb_me");
+    showLogin(); return;
+  }
   $("auth").hidden=true;$("app").hidden=false;
   $("meName").textContent=me.name;$("meId").textContent="@"+me.id;$("meAvatar").textContent=initial(me.name);
   await loadChats();connectRealtime();
@@ -111,13 +122,25 @@ function connectRealtime(){
 }
 function toggleTheme(){document.body.classList.toggle("dark");localStorage.setItem("gb_theme",document.body.classList.contains("dark")?"dark":"light")}
 function openProfile(){
+  if(!me || !me.id){ logout(); return; }
   $("profileModal").hidden=false;$("profileName").textContent=me.name;$("profileId").textContent=me.id;$("profileAvatar").textContent=initial(me.name);$("editName").value=me.name
 }
 function closeProfile(){$("profileModal").hidden=true}
 async function saveProfile(){
   const name=$("editName").value.trim();
-  try{const d=await api("/api/profile",{method:"POST",body:JSON.stringify({id:me.id,name})});me=d.user;saveMe();$("meName").textContent=me.name;closeProfile();toast("پروفایل ذخیره شد")}
-  catch(e){toast(e.message)}
+  if(!me || !me.id){ logout(); return; }
+  if(name.length<2){ toast("نام نمایشی باید حداقل ۲ کاراکتر باشد."); return; }
+  try{
+    const d=await api("/api/profile",{method:"POST",body:JSON.stringify({id:me.id,name})});
+    if(!d || !d.user || !d.user.id){ throw new Error("اطلاعات پروفایل از سرور کامل دریافت نشد."); }
+    me={...me,...d.user};
+    saveMe();
+    $("meName").textContent=me.name;
+    $("meId").textContent="@"+me.id;
+    $("meAvatar").textContent=initial(me.name);
+    closeProfile();
+    toast("پروفایل ذخیره شد");
+  }catch(e){toast(e.message||"ذخیره پروفایل انجام نشد")}
 }
 function logout(){localStorage.removeItem("gb_me");location.reload()}
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}

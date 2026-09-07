@@ -121,8 +121,10 @@ export class Directory extends DurableObject {
   async updateProfile(id,name){
     const u=await this.getUser(id); if(!u) return {ok:false,error:"NOT_FOUND"};
     if(name.length<2) return {ok:false,error:"BAD_NAME"};
-    this.sql.exec(`UPDATE users SET name=?1 WHERE id=?2`,name,id);
-    return {ok:true,user:{...u,name}};
+    this.sql.exec(`UPDATE users SET name=?1 WHERE id=?2`,name,cleanId(id));
+    const updated=await this.getUser(id);
+    if(!updated) return {ok:false,error:"NOT_FOUND",message:"حساب پیدا نشد."};
+    return {ok:true,user:updated};
   }
 }
 
