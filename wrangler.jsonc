@@ -15,18 +15,14 @@
       }
     ]
   },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": [
-        "ChatRoom"
-      ]
+  "exports": {
+    "ChatRoom": {
+      "type": "durable-object",
+      "storage": "sqlite"
     },
-    {
-      "tag": "v2",
-      "new_sqlite_classes": [
-        "ChatRoomV2"
-      ]
+    "ChatRoomV2": {
+      "type": "durable-object",
+      "storage": "sqlite"
     }
-  ]
+  }
 }

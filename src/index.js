@@ -12,6 +12,10 @@ function out(data, status=200) {
   return Response.json(data, { status, headers: { "Cache-Control": "no-store" }});
 }
 
+// Kept exported because the existing legacy migration depends on this class name.
+// The active binding uses ChatRoomV2 below.
+export class ChatRoom extends DurableObject {}
+
 export class ChatRoomV2 extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
