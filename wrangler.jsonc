@@ -2,19 +2,54 @@
   "name": "gorba-batman",
   "main": "src/index.js",
   "compatibility_date": "2026-09-08",
-  "assets": {"directory":"./public","binding":"ASSETS"},
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
   "durable_objects": {
     "bindings": [
-      {"name":"DIRECTORY","class_name":"Directory"},
-      {"name":"CHAT","class_name":"ChatRoom"},
-      {"name":"INBOX","class_name":"UserInbox"}
+      {
+        "name": "DIRECTORY",
+        "class_name": "Directory"
+      },
+      {
+        "name": "CHAT",
+        "class_name": "ChatRoom"
+      },
+      {
+        "name": "INBOX",
+        "class_name": "UserInbox"
+      },
+      {
+        "name": "GROUP",
+        "class_name": "GroupRoom"
+      }
     ]
   },
   "exports": {
-    "Directory":{"type":"durable-object","storage":"sqlite"},
-    "ChatRoom":{"type":"durable-object","storage":"sqlite"},
-    "UserInbox":{"type":"durable-object","storage":"sqlite"},
-    "ChatRoomV2":{"type":"durable-object","storage":"sqlite"},
-    "Messenger":{"type":"durable-object","storage":"sqlite"}
+    "Directory": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "ChatRoom": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "UserInbox": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "ChatRoomV2": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "Messenger": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "GroupRoom": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
   }
 }

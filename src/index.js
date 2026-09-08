@@ -44,6 +44,23 @@ export class Directory extends DurableObject {
       updated_at INTEGER NOT NULL DEFAULT 0
     );`);
 
+    sql.exec(`CREATE TABLE IF NOT EXISTS groups(
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      photo TEXT,
+      creator_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT 0
+    );`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS group_members(
+      group_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      muted INTEGER NOT NULL DEFAULT 0,
+      joined_at INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(group_id,user_id)
+    );`);
+    sql.exec("CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);");
+
     // Upgrade tables created by older Gorba Batman builds. Cloudflare
     // recommends doing schema initialization/migrations before requests.
     this.ensureColumn('users', 'avatar', 'TEXT');
@@ -104,6 +121,15 @@ export class Directory extends DurableObject {
       "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image FROM users WHERE id<>? ORDER BY created_at ASC, name COLLATE NOCASE ASC LIMIT 200", me
     ).toArray();
     return rows.map(u => this.decorate(u));
+  }
+
+  groupData(groupId,userId){
+    const g=this.ctx.storage.sql.exec("SELECT * FROM groups WHERE id=? LIMIT 1",groupId).toArray()[0];
+    if(!g) return null;
+    const me=this.ctx.storage.sql.exec("SELECT role,muted FROM group_members WHERE group_id=? AND user_id=? LIMIT 1",groupId,userId).toArray()[0];
+    if(!me) return null;
+    const count=this.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM group_members WHERE group_id=?",groupId).toArray()[0]?.n||0;
+    return {...g,member_count:Number(count),me_role:me.role,muted:!!me.muted};
   }
 
   async fetch(req) {
@@ -203,6 +229,91 @@ export class Directory extends DurableObject {
         );
         const u = this.user(id);
         return json({ ok:true, appearance:{theme:u.theme,primary_color:u.primary_color,chat_background:u.chat_background,chat_background_image:u.chat_background_image} });
+      }
+
+
+      if (req.method === "POST" && url.pathname === "/group-create") {
+        const body = await req.json();
+        const creator = String(body.creator_id || "");
+        const name = clean(String(body.name || "")).slice(0, 80);
+        if (!creator || !this.user(creator)) return json({ok:false,error:"کاربر سازنده پیدا نشد"},404);
+        if (!name) return json({ok:false,error:"نام گروه را وارد کنید"},400);
+        let photo = body.photo ? String(body.photo) : null;
+        if (photo && (!photo.startsWith("data:image/") || photo.length > 1800000)) photo = null;
+        const id = uid(), now = Date.now();
+        this.ctx.storage.sql.exec("INSERT INTO groups(id,name,photo,creator_id,created_at) VALUES(?,?,?,?,?)", id,name,photo,creator,now);
+        this.ctx.storage.sql.exec("INSERT INTO group_members(group_id,user_id,role,muted,joined_at) VALUES(?,?,?,?,?)", id,creator,"owner",0,now);
+        const members = Array.isArray(body.members) ? body.members : [];
+        for (const userId of members.slice(0,100)) {
+          const u=String(userId||"");
+          if (!u || u===creator || !this.user(u)) continue;
+          this.ctx.storage.sql.exec("INSERT OR IGNORE INTO group_members(group_id,user_id,role,muted,joined_at) VALUES(?,?,?,?,?)",id,u,"member",0,now);
+        }
+        return json({ok:true,group:this.groupData(id,creator)});
+      }
+
+      if (req.method === "GET" && url.pathname === "/groups") {
+        const userId = String(url.searchParams.get("id") || "");
+        if (!userId || !this.user(userId)) return json({ok:false,error:"شناسه نامعتبر"},400);
+        const rows=this.ctx.storage.sql.exec(
+          `SELECT g.id,g.name,g.photo,g.creator_id,g.created_at,
+                  gm.role,gm.muted,
+                  (SELECT COUNT(*) FROM group_members x WHERE x.group_id=g.id) AS member_count
+           FROM groups g JOIN group_members gm ON gm.group_id=g.id
+           WHERE gm.user_id=? ORDER BY g.created_at DESC`,userId
+        ).toArray();
+        return json({ok:true,groups:rows});
+      }
+
+      if (req.method === "GET" && url.pathname === "/group") {
+        const gid=String(url.searchParams.get("id")||""), uid2=String(url.searchParams.get("user")||"");
+        if(!gid||!uid2) return json({ok:false,error:"گروه نامعتبر"},400);
+        const g=this.groupData(gid,uid2);
+        return g ? json({ok:true,group:g}) : json({ok:false,error:"گروه پیدا نشد یا عضو نیست"},404);
+      }
+
+      if (req.method === "POST" && url.pathname === "/group-add") {
+        const body=await req.json(), gid=String(body.group_id||""), actor=String(body.actor_id||"");
+        const target=String(body.user_id||"");
+        const g=this.groupData(gid,actor);
+        if(!g) return json({ok:false,error:"گروه پیدا نشد یا دسترسی ندارید"},404);
+        if(!["owner","admin"].includes(g.me_role)) return json({ok:false,error:"فقط مدیر گروه می‌تواند عضو اضافه کند"},403);
+        if(!this.user(target)) return json({ok:false,error:"کاربر پیدا نشد"},404);
+        this.ctx.storage.sql.exec("INSERT OR IGNORE INTO group_members(group_id,user_id,role,muted,joined_at) VALUES(?,?,?,?,?)",gid,target,"member",0,Date.now());
+        return json({ok:true,group:this.groupData(gid,actor)});
+      }
+
+      if (req.method === "POST" && url.pathname === "/group-promote") {
+        const body=await req.json(), gid=String(body.group_id||""), actor=String(body.actor_id||""), target=String(body.user_id||"");
+        const g=this.groupData(gid,actor);
+        if(!g) return json({ok:false,error:"گروه پیدا نشد"},404);
+        if(g.me_role!=="owner") return json({ok:false,error:"فقط سازنده گروه می‌تواند مدیر تعیین کند"},403);
+        const member=this.ctx.storage.sql.exec("SELECT * FROM group_members WHERE group_id=? AND user_id=? LIMIT 1",gid,target).toArray()[0];
+        if(!member) return json({ok:false,error:"این کاربر عضو گروه نیست"},404);
+        const role=member.role==="admin"?"member":"admin";
+        this.ctx.storage.sql.exec("UPDATE group_members SET role=? WHERE group_id=? AND user_id=?",role,gid,target);
+        return json({ok:true,role});
+      }
+
+      if (req.method === "POST" && url.pathname === "/group-mute") {
+        const body=await req.json(), gid=String(body.group_id||""), userId=String(body.user_id||"");
+        const member=this.ctx.storage.sql.exec("SELECT * FROM group_members WHERE group_id=? AND user_id=? LIMIT 1",gid,userId).toArray()[0];
+        if(!member) return json({ok:false,error:"عضو گروه نیست"},404);
+        const muted=body.muted?1:0;
+        this.ctx.storage.sql.exec("UPDATE group_members SET muted=? WHERE group_id=? AND user_id=?",muted,gid,userId);
+        return json({ok:true,muted:!!muted});
+      }
+
+      if (req.method === "GET" && url.pathname === "/group-members") {
+        const gid=String(url.searchParams.get("id")||""), actor=String(url.searchParams.get("user")||"");
+        const g=this.groupData(gid,actor);
+        if(!g) return json({ok:false,error:"گروه پیدا نشد یا عضو نیست"},404);
+        const rows=this.ctx.storage.sql.exec(
+          `SELECT u.id,u.name,u.avatar,u.bio,gm.role,gm.muted
+           FROM group_members gm JOIN users u ON u.id=gm.user_id
+           WHERE gm.group_id=? ORDER BY CASE gm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,u.name COLLATE NOCASE`,gid
+        ).toArray();
+        return json({ok:true,members:rows});
       }
 
       if (req.method === "GET" && url.pathname === "/conversations") {
@@ -509,6 +620,63 @@ export class ChatRoom extends DurableObject {
   webSocketError() {}
 }
 
+
+export class GroupRoom extends DurableObject {
+  constructor(ctx, env){
+    super(ctx,env);
+    this.ctx=ctx; this.env=env;
+    ctx.blockConcurrencyWhile(async()=>{
+      ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS group_messages(
+        id TEXT PRIMARY KEY,
+        sender_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT 0
+      );`);
+      ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_group_messages_time ON group_messages(created_at,id);");
+    });
+  }
+  sockets(){
+    return this.ctx.getWebSockets();
+  }
+  async fetch(req){
+    const url=new URL(req.url);
+    try{
+      if(url.pathname==="/ws"){
+        if(req.headers.get("Upgrade")!=="websocket") return new Response("Expected WebSocket",{status:426});
+        const user=url.searchParams.get("user")||"";
+        const [client,server]=Object.values(new WebSocketPair());
+        this.ctx.acceptWebSocket(server);
+        server.serializeAttachment({user});
+        return new Response(null,{status:101,webSocket:client});
+      }
+      if(req.method==="GET"&&url.pathname==="/history"){
+        const limit=Math.min(30,Math.max(1,Number(url.searchParams.get("limit")||20)));
+        const beforeAt=Number(url.searchParams.get("before_at")||0);
+        const beforeId=String(url.searchParams.get("before_id")||"");
+        const where=beforeAt?"WHERE (created_at < ? OR (created_at=? AND id<?))":"";
+        const args=beforeAt?[beforeAt,beforeAt,beforeId,limit]:[limit];
+        const rows=this.ctx.storage.sql.exec(
+          `SELECT id,sender_id,text,created_at FROM group_messages ${where} ORDER BY created_at DESC,id DESC LIMIT ?`,...args
+        ).toArray().reverse();
+        return json({ok:true,messages:rows,has_more:rows.length===limit});
+      }
+      if(req.method==="POST"&&url.pathname==="/send"){
+        const b=await req.json(); const sender=String(b.sender_id||""), text=cleanMsg(b.text);
+        if(!sender||!text) return json({ok:false,error:"پیام نامعتبر"},400);
+        const id=uid(),now=Date.now();
+        this.ctx.storage.sql.exec("INSERT INTO group_messages(id,sender_id,text,created_at) VALUES(?,?,?,?)",id,sender,text,now);
+        const message={id,sender_id:sender,text,created_at:now};
+        for(const ws of this.sockets()){try{ws.send(JSON.stringify({type:"group-message",message}))}catch{}}
+        return json({ok:true,message});
+      }
+      return json({ok:false,error:"مسیر گروه پیدا نشد"},404);
+    }catch(e){return json({ok:false,error:e?.message||"خطای گروه"},500)}
+  }
+  webSocketClose(){}
+  webSocketError(){}
+  webSocketMessage(){}
+}
+
 export class UserInbox extends DurableObject {}
 export class ChatRoomV2 extends ChatRoom {}
 export class Messenger extends UserInbox {}
@@ -558,6 +726,36 @@ export default {
           const chat = env.CHAT.get(env.CHAT.idFromName(chatId));
           const target = url.pathname.replace('/api','');
           return chat.fetch(new Request("https://internal"+target,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}));
+        }
+
+
+        if (url.pathname === "/api/groups") {
+          const id=url.searchParams.get("id")||"";
+          return directory().fetch(new Request(new URL("/groups?id="+encodeURIComponent(id),"https://internal"),req));
+        }
+        if (["/api/group-create","/api/group-add","/api/group-promote","/api/group-mute"].includes(url.pathname)) {
+          return directory().fetch(new Request(new URL(url.pathname.replace("/api",""),"https://internal"),req));
+        }
+        if (url.pathname === "/api/group") {
+          return directory().fetch(new Request(new URL("/group"+url.search,"https://internal"),req));
+        }
+        if (url.pathname === "/api/group-members") {
+          return directory().fetch(new Request(new URL("/group-members"+url.search,"https://internal"),req));
+        }
+        if (url.pathname === "/api/group-history" || url.pathname === "/api/group-send" || url.pathname === "/api/group-ws") {
+          const gid=url.searchParams.get("id") || (url.pathname==="/api/group-send" ? "" : "");
+          let groupId=gid;
+          let body=null;
+          if(url.pathname==="/api/group-send"){ body=await req.clone().json(); groupId=String(body.group_id||""); }
+          if(!groupId) return json({ok:false,error:"گروه نامعتبر"},400);
+          if(!env.GROUP) return json({ok:false,error:"بایند گروه تنظیم نشده"},500);
+          const room=env.GROUP.get(env.GROUP.idFromName(groupId));
+          const target=url.pathname==="/api/group-history"?"/history":url.pathname==="/api/group-send"?"/send":"/ws";
+          const q=url.pathname==="/api/group-ws" ? url.searchParams.toString() : "";
+          const init = url.pathname==="/api/group-send"
+            ? {method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}
+            : req;
+          return room.fetch(new Request("https://internal"+target+(q?"?"+q:""),init));
         }
 
         if (url.pathname === "/api/upload") {
