@@ -51,6 +51,10 @@ export class Directory extends DurableObject {
     this.ensureColumn('users', 'bio', "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn('users', 'created_at', 'INTEGER NOT NULL DEFAULT 0');
     this.ensureColumn('users', 'last_seen', 'INTEGER NOT NULL DEFAULT 0');
+    this.ensureColumn('users', 'theme', "TEXT NOT NULL DEFAULT 'dark'");
+    this.ensureColumn('users', 'primary_color', "TEXT NOT NULL DEFAULT '#1677ff'");
+    this.ensureColumn('users', 'chat_background', "TEXT NOT NULL DEFAULT 'default'");
+    this.ensureColumn('users', 'chat_background_image', 'TEXT');
 
     this.ensureColumn('conversations', 'last_message', "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn('conversations', 'last_message_at', 'INTEGER NOT NULL DEFAULT 0');
@@ -72,14 +76,14 @@ export class Directory extends DurableObject {
 
   user(id) {
     const rows = this.ctx.storage.sql.exec(
-      "SELECT id,name,avatar,cover,bio,created_at,last_seen FROM users WHERE id=? LIMIT 1", id
+      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image FROM users WHERE id=? LIMIT 1", id
     ).toArray();
     return rows[0] || null;
   }
 
   byName(name) {
     const rows = this.ctx.storage.sql.exec(
-      "SELECT id,name,avatar,cover,bio,created_at,last_seen FROM users WHERE name=? LIMIT 1", name
+      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image FROM users WHERE name=? LIMIT 1", name
     ).toArray();
     return rows[0] || null;
   }
@@ -97,7 +101,7 @@ export class Directory extends DurableObject {
 
   allPeople(me) {
     const rows = this.ctx.storage.sql.exec(
-      "SELECT id,name,avatar,cover,bio,created_at,last_seen FROM users WHERE id<>? ORDER BY created_at ASC, name COLLATE NOCASE ASC LIMIT 200", me
+      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image FROM users WHERE id<>? ORDER BY created_at ASC, name COLLATE NOCASE ASC LIMIT 200", me
     ).toArray();
     return rows.map(u => this.decorate(u));
   }
@@ -115,8 +119,8 @@ export class Directory extends DurableObject {
           const now = Date.now();
           const id = uid();
           this.ctx.storage.sql.exec(
-            "INSERT INTO users(id,name,avatar,cover,bio,created_at,last_seen) VALUES(?,?,?,?,?,?,?)",
-            id, name, null, null, "", now, now
+            "INSERT INTO users(id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            id, name, null, null, "", now, now, 'dark', '#1677ff', 'default', null
           );
           user = this.user(id);
         } else {
@@ -143,7 +147,7 @@ export class Directory extends DurableObject {
         if (!q) return json({ ok: true, users: [] });
         const like = q.replace(/[\\%_]/g, m => "\\" + m) + "%";
         const rows = this.ctx.storage.sql.exec(
-          "SELECT id,name,avatar,cover,bio,created_at,last_seen FROM users WHERE name LIKE ? ESCAPE '\\\\' ORDER BY name COLLATE NOCASE LIMIT 30",
+          "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image FROM users WHERE name LIKE ? ESCAPE '\\\\' ORDER BY name COLLATE NOCASE LIMIT 30",
           like
         ).toArray();
         return json({ ok: true, users: rows.map(u => this.decorate(u)) });
@@ -166,6 +170,39 @@ export class Directory extends DurableObject {
           old.id
         );
         return json({ ok: true, user: this.decorate(this.user(old.id)) });
+      }
+
+      if (req.method === "GET" && url.pathname === "/appearance") {
+        const id = url.searchParams.get("id") || "";
+        const user = this.user(id);
+        if (!user) return json({ ok: false, error: "حساب پیدا نشد" }, 404);
+        return json({ ok: true, appearance: {
+          theme: user.theme || "dark",
+          primary_color: user.primary_color || "#1677ff",
+          chat_background: user.chat_background || "default",
+          chat_background_image: user.chat_background_image || null
+        }});
+      }
+
+      if (req.method === "POST" && url.pathname === "/appearance") {
+        const body = await req.json();
+        const id = String(body.id || "");
+        const old = this.user(id);
+        if (!old) return json({ ok: false, error: "حساب پیدا نشد" }, 404);
+        const allowedThemes = new Set(["dark","light"]);
+        const allowedBackgrounds = new Set(["default","blue","gradient","image"]);
+        const theme = allowedThemes.has(String(body.theme)) ? String(body.theme) : (old.theme || "dark");
+        const color = /^#[0-9a-fA-F]{6}$/.test(String(body.primary_color || "")) ? String(body.primary_color) : (old.primary_color || "#1677ff");
+        const background = allowedBackgrounds.has(String(body.chat_background)) ? String(body.chat_background) : (old.chat_background || "default");
+        let image = body.chat_background_image === undefined ? (old.chat_background_image || null) : body.chat_background_image;
+        if (image && String(image).length > 1800000) return json({ ok:false, error:"تصویر پس‌زمینه خیلی بزرگ است" },413);
+        if (image !== null && image !== undefined && !String(image).startsWith("data:image/")) image = null;
+        this.ctx.storage.sql.exec(
+          "UPDATE users SET theme=?,primary_color=?,chat_background=?,chat_background_image=? WHERE id=?",
+          theme, color, background, image, id
+        );
+        const u = this.user(id);
+        return json({ ok:true, appearance:{theme:u.theme,primary_color:u.primary_color,chat_background:u.chat_background,chat_background_image:u.chat_background_image} });
       }
 
       if (req.method === "GET" && url.pathname === "/conversations") {
@@ -490,7 +527,8 @@ export default {
           "/api/presence": "/presence",
           "/api/conversations": "/conversations",
           "/api/conversation": "/conversation",
-          "/api/read": "/read"
+          "/api/read": "/read",
+          "/api/appearance": "/appearance"
         };
         if (map[url.pathname]) {
           return directory().fetch(new Request(new URL(map[url.pathname] + url.search, "https://internal"), req));

@@ -20,3 +20,9 @@
 
 ## استقرار
 فایل‌های پروژه را در Cloudflare Worker قبلی جایگزین کن و deploy کن.
+
+
+## Update 4
+- Chat history behaves like a normal messenger: recent messages open at the bottom; scrolling upward loads older messages in batches, with scroll position preserved. No four-message UI limit.
+- Dark/light mode, selectable primary color, chat-only background presets/image, and account-persisted appearance settings.
+- Login flow is preserved from the known-good name-only version.
