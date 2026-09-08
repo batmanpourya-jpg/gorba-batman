@@ -33,19 +33,12 @@ export class Directory extends DurableObject {
       bio TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL DEFAULT 0,
       last_seen INTEGER NOT NULL DEFAULT 0
-    );`);
+    );
     sql.exec(`CREATE TABLE IF NOT EXISTS moderation_words(
-      id TEXT PRIMARY KEY,
-      word TEXT NOT NULL UNIQUE,
-      warning TEXT NOT NULL DEFAULT 'لطفاً از این کلمه استفاده نکنید.',
-      created_at INTEGER NOT NULL DEFAULT 0
+      id TEXT PRIMARY KEY, word TEXT NOT NULL UNIQUE, warning TEXT NOT NULL DEFAULT 'لطفاً از این کلمه استفاده نکنید.', created_at INTEGER NOT NULL DEFAULT 0
     );`);
     sql.exec(`CREATE TABLE IF NOT EXISTS admin_actions(
-      id TEXT PRIMARY KEY,
-      action TEXT NOT NULL,
-      target_user TEXT NOT NULL DEFAULT '',
-      details TEXT NOT NULL DEFAULT '',
-      created_at INTEGER NOT NULL DEFAULT 0
+      id TEXT PRIMARY KEY, action TEXT NOT NULL, target_user TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL DEFAULT 0
     );`);
     sql.exec(`CREATE TABLE IF NOT EXISTS conversations(
       pair_key TEXT PRIMARY KEY,
@@ -842,7 +835,14 @@ export default {
           "/api/save-message": "/save-message",
           "/api/saved-messages": "/saved-messages",
           "/api/report": "/report",
-          "/api/profile-visibility": "/profile-visibility"
+          "/api/profile-visibility": "/profile-visibility",
+          "/api/admin-login": "/admin-login",
+          "/api/admin-words": "/admin-words",
+          "/api/admin-word-add": "/admin-word-add",
+          "/api/admin-word-delete": "/admin-word-delete",
+          "/api/admin-users": "/admin-users",
+          "/api/admin-actions": "/admin-actions",
+          "/api/admin-reports": "/admin-reports"
         };
         if (map[url.pathname]) {
           return directory().fetch(new Request(new URL(map[url.pathname] + url.search, "https://internal"), req));

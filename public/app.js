@@ -1,4 +1,5 @@
 const $ = s => document.querySelector(s);
+const safeBind=(sel,ev,fn)=>{const el=$(sel);if(el)el.addEventListener(ev,fn)};
 let me=null,current=null,currentGroup=null,ws=null,presenceTimer=null,peopleTimer=null,searchTimer=null,chatSearchTimer=null,replyingTo=null,editingId=null,typingTimer=null;
 let oldestCursor=null, loadingOlder=false, hasOlder=true, pendingFile=null, mediaPreviewUrl=null, mediaRecorder=null, audioChunks=[], recordingStartedAt=0;
 let callPc=null,callStream=null,callRemoteStream=null,callKind='audio',callStartedByMe=false;
@@ -213,10 +214,18 @@ async function openSaved(){
       const b=document.createElement('button');b.className='primary';b.textContent='ارسال';
       b.onclick=async()=>{
         if(!current){alert('اول یک گفتگو را باز کن');return}
-        if(!m.text){alert('ارسال مجدد این رسانه در این نسخه فعال نیست');return}
+        if(!m.text){alert('ارسال مجدد رسانه‌های ذخیره‌شده فعلاً فعال نیست');return}
         try{
-          await api('/api/send',{method:'POST',body:JSON.stringify({sender_id:me.id,receiver_id:current.id,text:m.text})});
-          box.classList.add('hidden'); await loadHistory(true);
+          const d=await api('/api/send',{method:'POST',body:JSON.stringify({sender_id:me.id,receiver_id:current.id,text:m.text})});
+          box.classList.add('hidden');
+          if(d.message){
+            $('#messages').querySelector('.empty-list')?.remove();
+            if(!Array.from($('#messages').children).some(n=>n.dataset.messageId===d.message.id))$('#messages').append(bubble(d.message));
+            scrollBottom();
+          }else{
+            await openChat(current);
+          }
+          loadChats();
         }catch(err){alert(err.message)}
       };
       row.append(t,b);host.append(row);
@@ -305,9 +314,9 @@ bind('#groupInfoBtn','click',openGroupInfo);
 bind('#closeGroupInfo','click',()=>$('#groupInfoBox')?.classList.add('hidden'));
 bind('#groupAddSave','click',addSelectedGroupMembers);
 bind('#groupMuteBtn','click',toggleGroupMute);
-bind('#adminBtn','click',openAdmin);bind('#closeAdmin','click',()=>$('#adminBox')?.classList.add('hidden'));bind('#globalSearch','input',globalSearch);bind('#sendReport','click',sendReport);
+bind('#closeAdmin','click',()=>$('#adminBox')?.classList.add('hidden'));bind('#globalSearch','input',globalSearch);bind('#sendReport','click',sendReport);
 bind('#voiceCallBtn','click',()=>startCall('audio'));bind('#videoCallBtn','click',()=>startCall('video'));bind('#hangup','click',()=>endCall(true));bind('#closeCall','click',()=>endCall(true));bind('#callMute','click',toggleCallMute);bind('#callCamera','click',toggleCallCamera);
-bind('#pinnedBtn','click',openPinned);bind('#savedBtn','click',openSaved);bind('#closeSaved','click',()=>$('#savedBox')?.classList.add('hidden'));enableNotifications();
+bind('#pinnedBtn','click',openPinned);bind('#savedBtn','click',openSaved);enableNotifications();
 
 
 if(me){enter();loadAppearance();}
