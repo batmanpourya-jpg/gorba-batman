@@ -10,7 +10,6 @@ const uid = () => crypto.randomUUID();
 const pairKey = (a, b) => [String(a), String(b)].sort().join(":");
 const isOnline = ts => Number(ts || 0) > Date.now() - 45000;
 
-const ADMIN_PASSWORD_HASH="b4edb28913277058d91fb8a5f0f440b20c2c00a4e6a7538176f2fb901362d97a";
 export class Directory extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
@@ -34,12 +33,6 @@ export class Directory extends DurableObject {
       created_at INTEGER NOT NULL DEFAULT 0,
       last_seen INTEGER NOT NULL DEFAULT 0
     );`);
-    sql.exec(`CREATE TABLE IF NOT EXISTS moderation_words(
-      id TEXT PRIMARY KEY, word TEXT NOT NULL UNIQUE, warning TEXT NOT NULL DEFAULT 'لطفاً از این کلمه استفاده نکنید.', created_at INTEGER NOT NULL DEFAULT 0
-    );`);
-    sql.exec(`CREATE TABLE IF NOT EXISTS admin_actions(
-      id TEXT PRIMARY KEY, action TEXT NOT NULL, target_user TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL DEFAULT 0
-    );`);
     sql.exec(`CREATE TABLE IF NOT EXISTS conversations(
       pair_key TEXT PRIMARY KEY,
       user_a TEXT NOT NULL,
@@ -51,17 +44,6 @@ export class Directory extends DurableObject {
       updated_at INTEGER NOT NULL DEFAULT 0
     );`);
 
-    sql.exec(`CREATE TABLE IF NOT EXISTS saved_messages(
-      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, message_id TEXT NOT NULL,
-      chat_key TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', media_id TEXT,
-      created_at INTEGER NOT NULL DEFAULT 0
-    );`);
-    sql.exec(`CREATE TABLE IF NOT EXISTS global_message_index(
-      id TEXT PRIMARY KEY, message_id TEXT NOT NULL, sender_id TEXT NOT NULL,
-      receiver_id TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL DEFAULT 0
-    );`);
-    sql.exec("CREATE INDEX IF NOT EXISTS idx_global_msg_text ON global_message_index(text);");
-    sql.exec("CREATE TABLE IF NOT EXISTS reports(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,message TEXT NOT NULL,created_at INTEGER NOT NULL);");
     sql.exec(`CREATE TABLE IF NOT EXISTS groups(
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -90,9 +72,6 @@ export class Directory extends DurableObject {
     this.ensureColumn('users', 'primary_color', "TEXT NOT NULL DEFAULT '#1677ff'");
     this.ensureColumn('users', 'chat_background', "TEXT NOT NULL DEFAULT 'default'");
     this.ensureColumn('users', 'chat_background_image', 'TEXT');
-    this.ensureColumn('users', 'profile_show_bio', 'INTEGER NOT NULL DEFAULT 1');
-    this.ensureColumn('users', 'profile_show_last_seen', 'INTEGER NOT NULL DEFAULT 1');
-    this.ensureColumn('users', 'profile_show_avatar', 'INTEGER NOT NULL DEFAULT 1');
 
     this.ensureColumn('conversations', 'last_message', "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn('conversations', 'last_message_at', 'INTEGER NOT NULL DEFAULT 0');
@@ -114,14 +93,14 @@ export class Directory extends DurableObject {
 
   user(id) {
     const rows = this.ctx.storage.sql.exec(
-      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image,profile_show_bio,profile_show_last_seen,profile_show_avatar FROM users WHERE id=? LIMIT 1", id
+      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image FROM users WHERE id=? LIMIT 1", id
     ).toArray();
     return rows[0] || null;
   }
 
   byName(name) {
     const rows = this.ctx.storage.sql.exec(
-      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image,profile_show_bio,profile_show_last_seen,profile_show_avatar FROM users WHERE name=? LIMIT 1", name
+      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image FROM users WHERE name=? LIMIT 1", name
     ).toArray();
     return rows[0] || null;
   }
@@ -139,7 +118,7 @@ export class Directory extends DurableObject {
 
   allPeople(me) {
     const rows = this.ctx.storage.sql.exec(
-      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image,profile_show_bio,profile_show_last_seen,profile_show_avatar FROM users WHERE id<>? ORDER BY name COLLATE NOCASE ASC LIMIT 200", me
+      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image FROM users WHERE id<>? ORDER BY created_at ASC, name COLLATE NOCASE ASC LIMIT 200", me
     ).toArray();
     return rows.map(u => this.decorate(u));
   }
@@ -192,9 +171,9 @@ export class Directory extends DurableObject {
       if (req.method === "GET" && url.pathname === "/search") {
         const q = clean(url.searchParams.get("q"));
         if (!q) return json({ ok: true, users: [] });
-        const like = "%" + q.replace(/[\\%_]/g, m => "\\" + m) + "%";
+        const like = q.replace(/[\\%_]/g, m => "\\" + m) + "%";
         const rows = this.ctx.storage.sql.exec(
-          "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image,profile_show_bio,profile_show_last_seen,profile_show_avatar FROM users WHERE name LIKE ? ESCAPE '\\\\' ORDER BY name COLLATE NOCASE LIMIT 30",
+          "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image FROM users WHERE name LIKE ? ESCAPE '\\\\' ORDER BY name COLLATE NOCASE LIMIT 30",
           like
         ).toArray();
         return json({ ok: true, users: rows.map(u => this.decorate(u)) });
@@ -337,83 +316,6 @@ export class Directory extends DurableObject {
         return json({ok:true,members:rows});
       }
 
-
-      if (req.method === "GET" && url.pathname === "/global-search") {
-        const q=clean(url.searchParams.get("q")||"").trim();
-        if(!q) return json({ok:true,users:[],messages:[]});
-        const like="%"+q.replace(/[%_]/g,m=>"\\"+m)+"%";
-        const users=this.ctx.storage.sql.exec("SELECT id,name,avatar,bio,last_seen FROM users WHERE name LIKE ? ESCAPE '\\' ORDER BY name COLLATE NOCASE LIMIT 30",like).toArray().map(u=>this.decorate(u));
-        const messages=this.ctx.storage.sql.exec("SELECT * FROM global_message_index WHERE text LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT 50",like).toArray();
-        return json({ok:true,users,messages});
-      }
-      if (req.method === "POST" && url.pathname === "/index-message") {
-        const b=await req.json(); if(!b.id||!b.sender_id||!b.receiver_id)return json({ok:false,error:"پیام نامعتبر"},400);
-        this.ctx.storage.sql.exec("INSERT OR REPLACE INTO global_message_index(id,message_id,sender_id,receiver_id,text,created_at) VALUES(?,?,?,?,?,?)",
-          uid(),String(b.id),String(b.sender_id),String(b.receiver_id),cleanMsg(String(b.text||"")),Number(b.created_at||Date.now()));
-        return json({ok:true});
-      }
-      if (req.method === "POST" && url.pathname === "/save-message") {
-        const b=await req.json(), uid2=String(b.user_id||"");
-        if(!uid2||!this.user(uid2))return json({ok:false,error:"کاربر نامعتبر"},400);
-        const id=uid(); this.ctx.storage.sql.exec("INSERT INTO saved_messages(id,user_id,message_id,chat_key,text,media_id,created_at) VALUES(?,?,?,?,?,?,?)",
-          id,uid2,String(b.message_id||""),String(b.chat_key||""),cleanMsg(String(b.text||"")),b.media_id?String(b.media_id):null,Date.now());
-        return json({ok:true});
-      }
-      if (req.method === "GET" && url.pathname === "/saved-messages") {
-        const uid2=String(url.searchParams.get("user_id")||"");
-        const rows=this.ctx.storage.sql.exec("SELECT * FROM saved_messages WHERE user_id=? ORDER BY created_at DESC LIMIT 200",uid2).toArray();
-        return json({ok:true,messages:rows});
-      }
-      if (req.method === "POST" && url.pathname === "/report") {
-        const b=await req.json(), uid2=String(b.user_id||""), message=cleanMsg(String(b.message||"")).slice(0,2000);
-        if(!uid2||!message)return json({ok:false,error:"گزارش خالی است"},400);
-        this.ctx.storage.sql.exec("INSERT INTO reports(id,user_id,message,created_at) VALUES(?,?,?,?)",uid(),uid2,message,Date.now());
-        return json({ok:true});
-      }
-      if (req.method === "POST" && url.pathname === "/profile-visibility") {
-        const b=await req.json(), uid2=String(b.id||"");
-        if(!this.user(uid2))return json({ok:false,error:"کاربر پیدا نشد"},404);
-        this.ctx.storage.sql.exec("UPDATE users SET profile_show_bio=?,profile_show_last_seen=?,profile_show_avatar=? WHERE id=?",
-          b.show_bio?1:0,b.show_last_seen?1:0,b.show_avatar?1:0,uid2);
-        return json({ok:true,user:this.decorate(this.user(uid2))});
-      }
-      if(req.method==="POST" && url.pathname==="/admin-login"){
-        const b=await req.json();
-        const h=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(String(b.password||"")));
-        const got=Array.from(new Uint8Array(h)).map(x=>x.toString(16).padStart(2,"0")).join("");
-        return got===ADMIN_PASSWORD_HASH?json({ok:true}):json({ok:false,error:"رمز مدیریت اشتباه است"},401);
-      }
-      if(req.method==="GET" && url.pathname==="/admin-words"){
-        return json({ok:true,words:this.ctx.storage.sql.exec("SELECT * FROM moderation_words ORDER BY created_at DESC").toArray()});
-      }
-      if(req.method==="POST" && url.pathname==="/admin-word-add"){
-        const b=await req.json(),w=String(b.word||"").trim(),warning=String(b.warning||"لطفاً از این کلمه استفاده نکنید.").trim();
-        if(!w)return json({ok:false,error:"کلمه خالی است"},400);
-        this.ctx.storage.sql.exec("INSERT OR IGNORE INTO moderation_words(id,word,warning,created_at) VALUES(?,?,?,?)",uid(),w,warning,Date.now());
-        this.ctx.storage.sql.exec("INSERT INTO admin_actions(id,action,details,created_at) VALUES(?,?,?,?)",uid(),"add_word",w,Date.now());
-        return json({ok:true});
-      }
-      if(req.method==="POST" && url.pathname==="/admin-word-delete"){
-        const b=await req.json();this.ctx.storage.sql.exec("DELETE FROM moderation_words WHERE id=?",String(b.id||""));
-        this.ctx.storage.sql.exec("INSERT INTO admin_actions(id,action,details,created_at) VALUES(?,?,?,?)",uid(),"delete_word",String(b.id||""),Date.now());
-        return json({ok:true});
-      }
-      if(req.method==="GET" && url.pathname==="/admin-users"){
-        return json({ok:true,users:this.ctx.storage.sql.exec("SELECT id,name,avatar,bio,created_at,last_seen FROM users ORDER BY created_at DESC LIMIT 500").toArray()});
-      }
-      if(req.method==="GET" && url.pathname==="/admin-actions"){
-        return json({ok:true,actions:this.ctx.storage.sql.exec("SELECT * FROM admin_actions ORDER BY created_at DESC LIMIT 300").toArray()});
-      }
-      if(req.method==="GET" && url.pathname==="/admin-reports"){
-        return json({ok:true,reports:this.ctx.storage.sql.exec("SELECT * FROM reports ORDER BY created_at DESC LIMIT 300").toArray()});
-      }
-      if(req.method==="POST" && url.pathname==="/resend-saved"){
-        const b=await req.json(); const text=String(b.text||"").trim(), sender=String(b.sender_id||""), receiver=String(b.receiver_id||"");
-        if(!text||!sender||!receiver)return json({ok:false,error:"پیام نامعتبر"},400);
-        const pair=pairKey(sender,receiver);
-        const id=this.env?.CHAT ? null : null;
-        return json({ok:true,pair_key:pair,text});
-      }
       if (req.method === "GET" && url.pathname === "/conversations") {
         const me = url.searchParams.get("id") || "";
         if (!me || !this.user(me)) return json({ ok: false, error: "شناسه نامعتبر" }, 400);
@@ -484,10 +386,6 @@ export class Directory extends DurableObject {
             preview, now, now, old.pair_key
           );
         }
-        if(body.id){
-          this.ctx.storage.sql.exec("INSERT OR REPLACE INTO global_message_index(id,message_id,sender_id,receiver_id,text,created_at) VALUES(?,?,?,?,?,?)",
-            uid(),String(body.id),sender,receiver,text,now);
-        }
         return json({ ok: true });
       }
 
@@ -530,7 +428,7 @@ export class ChatRoom extends DurableObject {
       );`);
       const cols = sql.exec('PRAGMA table_info(messages)').toArray();
       const add = (c,d) => { if (!cols.some(r => r.name === c)) sql.exec(`ALTER TABLE messages ADD COLUMN ${c} ${d}`); };
-      add('reply_to_id','TEXT'); add('edited','INTEGER NOT NULL DEFAULT 0'); add('edited_at','INTEGER'); add('read_at','INTEGER'); add('pinned','INTEGER NOT NULL DEFAULT 0'); add('hidden_for_sender','INTEGER NOT NULL DEFAULT 0'); add('hidden_for_receiver','INTEGER NOT NULL DEFAULT 0');
+      add('reply_to_id','TEXT'); add('edited','INTEGER NOT NULL DEFAULT 0'); add('edited_at','INTEGER'); add('read_at','INTEGER'); add('pinned','INTEGER NOT NULL DEFAULT 0');
       sql.exec("CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(sender_id,receiver_id,created_at);");
       sql.exec("CREATE INDEX IF NOT EXISTS idx_messages_reply ON messages(reply_to_id);");
       sql.exec(`CREATE TABLE IF NOT EXISTS media_chunks(
@@ -571,20 +469,15 @@ export class ChatRoom extends DurableObject {
         const beforeAt = Number(url.searchParams.get("before_at") || url.searchParams.get("before") || 0);
         const beforeId = String(url.searchParams.get("before_id") || "");
         if (!a || !b || a === b) return json({ ok:false,error:"چت نامعتبر است" },400);
-        const cols="id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned,media_id,media_type,media_name,media_size,media_mime,hidden_for_sender,hidden_for_receiver";
+        const cols="id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned,media_id,media_type,media_name,media_size,media_mime";
         let rows;
         if (beforeAt) {
           rows=this.ctx.storage.sql.exec(
-            `SELECT ${cols} FROM messages WHERE ((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?))
-             AND NOT ((sender_id=? AND receiver_id=? AND hidden_for_sender=1) OR (sender_id=? AND receiver_id=? AND hidden_for_receiver=1))
-             AND (created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC,id DESC LIMIT ?`,
-            a,b,b,a,a,b,b,a,beforeAt,beforeAt,beforeId,limit
+            `SELECT ${cols} FROM messages WHERE ((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)) AND (created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC,id DESC LIMIT ?`,
+            a,b,b,a,beforeAt,beforeAt,beforeId,limit
           ).toArray().reverse();
         } else {
-          rows=this.ctx.storage.sql.exec(`SELECT ${cols} FROM messages
-             WHERE ((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?))
-             AND NOT ((sender_id=? AND receiver_id=? AND hidden_for_sender=1) OR (sender_id=? AND receiver_id=? AND hidden_for_receiver=1))
-             ORDER BY created_at DESC,id DESC LIMIT ?`,a,b,b,a,a,b,b,a,limit).toArray().reverse();
+          rows=this.ctx.storage.sql.exec(`SELECT ${cols} FROM messages WHERE (sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?) ORDER BY created_at DESC,id DESC LIMIT ?`,a,b,b,a,limit).toArray().reverse();
         }
         const first=rows[0], last=rows[rows.length-1];
         return json({ok:true,messages:rows,has_more:rows.length===limit,cursor:first?{created_at:first.created_at,id:first.id}:null,next_cursor:last?{created_at:last.created_at,id:last.id}:null});
@@ -681,12 +574,6 @@ export class ChatRoom extends DurableObject {
         return new Response(out,{headers:{"content-type":meta.mime||"application/octet-stream","content-length":String(out.byteLength),"content-disposition":`inline; filename*=UTF-8''${encodeURIComponent(meta.name)}`,"cache-control":"public,max-age=31536000,immutable"}});
       }
 
-      if (req.method === "GET" && url.pathname === "/pinned") {
-        const a=String(url.searchParams.get('a')||''), b=String(url.searchParams.get('b')||'');
-        const rows=this.ctx.storage.sql.exec("SELECT id,sender_id,receiver_id,text,created_at,deleted,pinned,media_id,media_type,media_name FROM messages WHERE ((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)) AND pinned=1 ORDER BY created_at DESC LIMIT 100",a,b,b,a).toArray();
-        return json({ok:true,messages:rows});
-      }
-
       if (req.method === "GET" && url.pathname === "/search-messages") {
         const a=String(url.searchParams.get('a')||''), b=String(url.searchParams.get('b')||''), q=String(url.searchParams.get('q')||'').trim();
         if(!a||!b||!q) return json({ok:true,messages:[]}); const like='%'+q.replace(/[\%_]/g,m=>'\\'+m)+'%';
@@ -696,20 +583,20 @@ export class ChatRoom extends DurableObject {
 
       if (req.method === "POST" && url.pathname === "/delete") {
         const body = await req.json();
-        const id = String(body.id || ""), requester = String(body.requester || ""), mode=String(body.mode||"all");
-        const m = this.ctx.storage.sql.exec("SELECT id,sender_id,receiver_id FROM messages WHERE id=? LIMIT 1", id).toArray()[0];
-        if (!m) return json({ok:false,error:"پیام پیدا نشد"},404);
-        if(mode==="me"){
-          if(requester!==m.sender_id && requester!==m.receiver_id) return json({ok:false,error:"دسترسی ندارید"},403);
-          const col=requester===m.sender_id?"hidden_for_sender":"hidden_for_receiver";
-          this.ctx.storage.sql.exec(`UPDATE messages SET ${col}=1 WHERE id=?`,id);
-          return json({ok:true,mode:"me"});
-        }
-        if (m.sender_id !== requester) return json({ ok:false,error:"برای همه فقط فرستنده می‌تواند حذف کند" },403);
+        const id = String(body.id || ""), requester = String(body.requester || "");
+        const rows = this.ctx.storage.sql.exec(
+          "SELECT id,sender_id,receiver_id FROM messages WHERE id=? LIMIT 1", id
+        ).toArray();
+        const message = rows[0];
+        if (!message) return json({ ok: false, error: "پیام پیدا نشد" }, 404);
+        if (message.sender_id !== requester) return json({ ok: false, error: "فقط فرستنده می‌تواند پیام را حذف کند" }, 403);
         this.ctx.storage.sql.exec("UPDATE messages SET text='',deleted=1 WHERE id=?", id);
-        for (const ws of this.socketsFor(m.sender_id,m.receiver_id)) { try { ws.send(JSON.stringify({type:"deleted",id})); } catch {} }
-        return json({ok:true,mode:"all"});
+        for (const ws of this.socketsFor(message.sender_id, message.receiver_id)) {
+          try { ws.send(JSON.stringify({ type: "deleted", id })); } catch {}
+        }
+        return json({ ok: true });
       }
+
       return json({ ok: false, error: "not found" }, 404);
     } catch (error) {
       return json({ ok: false, error: error?.message || "خطای چت" }, 500);
@@ -720,13 +607,11 @@ export class ChatRoom extends DurableObject {
   webSocketMessage(ws, message) {
     try {
       const data = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message));
+      if (data.type !== 'typing') return;
       const att = ws.deserializeAttachment() || {};
-      if(data.type==='typing'){
-        for(const peer of this.socketsForPair(att.pair)){if(peer===ws)continue;try{peer.send(JSON.stringify({type:'typing',show:!!data.show}))}catch{}}
-        return;
-      }
-      if(['call-offer','call-answer','call-ice','call-end'].includes(data.type)){
-        for(const peer of this.socketsForPair(att.pair)){if(peer===ws)continue;try{peer.send(JSON.stringify({type:data.type,from:att.user||'',payload:data.payload||null}))}catch{}}
+      for (const peer of this.socketsForPair(att.pair)) {
+        if (peer === ws) continue;
+        try { peer.send(JSON.stringify({ type: 'typing', show: !!data.show })); } catch {}
       }
     } catch {}
   }
@@ -744,14 +629,9 @@ export class GroupRoom extends DurableObject {
       ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS group_messages(
         id TEXT PRIMARY KEY,
         sender_id TEXT NOT NULL,
-        text TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL DEFAULT 0,
-        media_id TEXT, media_type TEXT, media_name TEXT, media_size INTEGER, media_mime TEXT
+        text TEXT NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT 0
       );`);
-      const cols=ctx.storage.sql.exec("PRAGMA table_info(group_messages)").toArray();
-      const add=(c,d)=>{if(!cols.some(r=>r.name===c))ctx.storage.sql.exec(`ALTER TABLE group_messages ADD COLUMN ${c} ${d}`)};
-      add('media_id','TEXT');add('media_type','TEXT');add('media_name','TEXT');add('media_size','INTEGER');add('media_mime','TEXT');
-      ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS group_media_chunks(media_id TEXT NOT NULL,chunk_no INTEGER NOT NULL,data BLOB NOT NULL,PRIMARY KEY(media_id,chunk_no));`);
       ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_group_messages_time ON group_messages(created_at,id);");
     });
   }
@@ -776,35 +656,18 @@ export class GroupRoom extends DurableObject {
         const where=beforeAt?"WHERE (created_at < ? OR (created_at=? AND id<?))":"";
         const args=beforeAt?[beforeAt,beforeAt,beforeId,limit]:[limit];
         const rows=this.ctx.storage.sql.exec(
-          `SELECT id,sender_id,text,created_at,media_id,media_type,media_name,media_size,media_mime FROM group_messages ${where} ORDER BY created_at DESC,id DESC LIMIT ?`,...args
+          `SELECT id,sender_id,text,created_at FROM group_messages ${where} ORDER BY created_at DESC,id DESC LIMIT ?`,...args
         ).toArray().reverse();
         return json({ok:true,messages:rows,has_more:rows.length===limit});
       }
       if(req.method==="POST"&&url.pathname==="/send"){
         const b=await req.json(); const sender=String(b.sender_id||""), text=cleanMsg(b.text);
-        const media_id=b.media_id?String(b.media_id):null, media_type=b.media_type?String(b.media_type):null, media_name=b.media_name?String(b.media_name):null, media_size=Number(b.media_size||0), media_mime=b.media_mime?String(b.media_mime):null;
-        if(!sender||(!text&&!media_id))return json({ok:false,error:"پیام نامعتبر"},400);
+        if(!sender||!text) return json({ok:false,error:"پیام نامعتبر"},400);
         const id=uid(),now=Date.now();
-        this.ctx.storage.sql.exec("INSERT INTO group_messages(id,sender_id,text,created_at,media_id,media_type,media_name,media_size,media_mime) VALUES(?,?,?,?,?,?,?,?,?)",id,sender,text,now,media_id,media_type,media_name,media_size,media_mime);
-        const message={id,sender_id:sender,text,created_at:now,media_id,media_type,media_name,media_size,media_mime};
+        this.ctx.storage.sql.exec("INSERT INTO group_messages(id,sender_id,text,created_at) VALUES(?,?,?,?)",id,sender,text,now);
+        const message={id,sender_id:sender,text,created_at:now};
         for(const ws of this.sockets()){try{ws.send(JSON.stringify({type:"group-message",message}))}catch{}}
         return json({ok:true,message});
-      }
-      if(req.method==="POST"&&url.pathname==="/upload"){
-        const form=await req.formData(), sender=String(form.get("sender_id")||""), file=form.get("file");
-        if(!sender||!(file instanceof File))return json({ok:false,error:"فایل نامعتبر"},400);
-        const MAX=20*1024*1024;if(file.size>MAX)return json({ok:false,error:"حداکثر ۲۰MB"},413);
-        const id=uid(),buf=new Uint8Array(await file.arrayBuffer()),CHUNK=1024*1024;
-        for(let off=0,no=0;off<buf.length;off+=CHUNK,no++)this.ctx.storage.sql.exec("INSERT INTO group_media_chunks(media_id,chunk_no,data) VALUES(?,?,?)",id,no,buf.slice(off,Math.min(off+CHUNK,buf.length)));
-        const type=String(form.get("type")|| (file.type.startsWith("image/")?"image":file.type.startsWith("video/")?"video":file.type.startsWith("audio/")?"audio":"file"));
-        return json({ok:true,media:{id,name:String(file.name||"file"),mime:String(file.type||"application/octet-stream"),size:file.size,type}});
-      }
-      if(req.method==="GET"&&url.pathname==="/media"){
-        const id=String(url.searchParams.get("id")||"");const meta=this.ctx.storage.sql.exec("SELECT media_id,media_name,media_mime,media_size FROM group_messages WHERE media_id=? LIMIT 1",id).toArray()[0];
-        if(!meta)return new Response("Not found",{status:404});
-        const rows=this.ctx.storage.sql.exec("SELECT data FROM group_media_chunks WHERE media_id=? ORDER BY chunk_no",id).toArray();
-        const out=new Uint8Array(Number(meta.media_size||0));let p=0;for(const r of rows){const b=new Uint8Array(r.data);out.set(b,p);p+=b.byteLength}
-        return new Response(out,{headers:{"content-type":meta.media_mime||"application/octet-stream","content-length":String(out.length)}});
       }
       return json({ok:false,error:"مسیر گروه پیدا نشد"},404);
     }catch(e){return json({ok:false,error:e?.message||"خطای گروه"},500)}
@@ -833,19 +696,7 @@ export default {
           "/api/conversations": "/conversations",
           "/api/conversation": "/conversation",
           "/api/read": "/read",
-          "/api/appearance": "/appearance",
-          "/api/global-search": "/global-search",
-          "/api/save-message": "/save-message",
-          "/api/saved-messages": "/saved-messages",
-          "/api/report": "/report",
-          "/api/profile-visibility": "/profile-visibility",
-          "/api/admin-login": "/admin-login",
-          "/api/admin-words": "/admin-words",
-          "/api/admin-word-add": "/admin-word-add",
-          "/api/admin-word-delete": "/admin-word-delete",
-          "/api/admin-users": "/admin-users",
-          "/api/admin-actions": "/admin-actions",
-          "/api/admin-reports": "/admin-reports"
+          "/api/appearance": "/appearance"
         };
         if (map[url.pathname]) {
           return directory().fetch(new Request(new URL(map[url.pathname] + url.search, "https://internal"), req));
@@ -891,15 +742,7 @@ export default {
         if (url.pathname === "/api/group-members") {
           return directory().fetch(new Request(new URL("/group-members"+url.search,"https://internal"),req));
         }
-                if (url.pathname === "/api/group-upload") {
-          const form=await req.formData(); const gid=String(form.get("group_id")||""); if(!gid)return json({ok:false,error:"گروه نامعتبر"},400);
-          const room=env.GROUP.get(env.GROUP.idFromName(gid)); return room.fetch(new Request("https://internal/upload",{method:"POST",body:form}));
-        }
-        if (url.pathname === "/api/group-media") {
-          const gid=url.searchParams.get("group_id")||"", id=url.searchParams.get("id")||""; if(!gid||!id)return new Response("Not found",{status:404});
-          const room=env.GROUP.get(env.GROUP.idFromName(gid)); return room.fetch(new Request("https://internal/media?id="+encodeURIComponent(id)));
-        }
-if (url.pathname === "/api/group-history" || url.pathname === "/api/group-send" || url.pathname === "/api/group-ws") {
+        if (url.pathname === "/api/group-history" || url.pathname === "/api/group-send" || url.pathname === "/api/group-ws") {
           const gid=url.searchParams.get("id") || (url.pathname==="/api/group-send" ? "" : "");
           let groupId=gid;
           let body=null;
@@ -928,12 +771,6 @@ if (url.pathname === "/api/group-history" || url.pathname === "/api/group-send" 
           // The client always supplies the chat pair as a,b.
           const a=url.searchParams.get("a")||"",b=url.searchParams.get("b")||""; if(!a||!b)return new Response("Missing chat",{status:400});
           const chat=env.CHAT.get(env.CHAT.idFromName(pairKey(a,b))); return chat.fetch(new Request("https://internal/media?id="+encodeURIComponent(id)));
-        }
-
-        if (url.pathname === "/api/pinned") {
-          const a=url.searchParams.get("a")||"",b=url.searchParams.get("b")||"";
-          const chat=env.CHAT.get(env.CHAT.idFromName(pairKey(a,b)));
-          return chat.fetch(new Request("https://internal/pinned"+url.search));
         }
 
         if (url.pathname === "/api/search-messages") {
