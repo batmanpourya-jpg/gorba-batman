@@ -305,12 +305,22 @@ export class ChatRoom extends DurableObject {
 
       if (req.method === "GET" && url.pathname === "/history") {
         const a = url.searchParams.get("a") || "", b = url.searchParams.get("b") || "";
+        const limit = Math.min(20, Math.max(1, Number(url.searchParams.get("limit") || 4)));
+        const before = Number(url.searchParams.get("before") || 0);
         if (!a || !b || a === b) return json({ ok: false, error: "چت نامعتبر" }, 400);
-        const rows = this.ctx.storage.sql.exec(
-          "SELECT id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned FROM messages WHERE (sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?) ORDER BY created_at ASC,id ASC LIMIT 500",
-          a, b, b, a
-        ).toArray();
-        return json({ ok: true, messages: rows });
+        let rows;
+        if (before > 0) {
+          rows = this.ctx.storage.sql.exec(
+            "SELECT id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned FROM messages WHERE ((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)) AND created_at < ? ORDER BY created_at DESC,id DESC LIMIT ?",
+            a, b, b, a, before, limit
+          ).toArray().reverse();
+        } else {
+          rows = this.ctx.storage.sql.exec(
+            "SELECT id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned FROM messages WHERE (sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?) ORDER BY created_at DESC,id DESC LIMIT ?",
+            a, b, b, a, limit
+          ).toArray().reverse();
+        }
+        return json({ ok: true, messages: rows, has_more: rows.length === limit });
       }
 
       if (req.method === "POST" && url.pathname === "/send") {
