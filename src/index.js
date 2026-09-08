@@ -14,16 +14,26 @@ export class Directory extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.ctx = ctx;
-    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS users(
+    // IMPORTANT: this runs before any request is processed. Older deployments
+    // already have a users table, so CREATE TABLE IF NOT EXISTS alone is not
+    // enough: we must upgrade the existing schema safely.
+    ctx.blockConcurrencyWhile(async () => {
+      this.migrate();
+    });
+  }
+
+  migrate() {
+    const sql = this.ctx.storage.sql;
+    sql.exec(`CREATE TABLE IF NOT EXISTS users(
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL COLLATE NOCASE UNIQUE,
       avatar TEXT,
       cover TEXT,
       bio TEXT NOT NULL DEFAULT '',
-      created_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT 0,
       last_seen INTEGER NOT NULL DEFAULT 0
     );`);
-    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS conversations(
+    sql.exec(`CREATE TABLE IF NOT EXISTS conversations(
       pair_key TEXT PRIMARY KEY,
       user_a TEXT NOT NULL,
       user_b TEXT NOT NULL,
@@ -33,7 +43,31 @@ export class Directory extends DurableObject {
       unread_b INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL DEFAULT 0
     );`);
-    ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS idx_users_name ON users(name COLLATE NOCASE);`);
+
+    // Upgrade tables created by older Gorba Batman builds. Cloudflare
+    // recommends doing schema initialization/migrations before requests.
+    this.ensureColumn('users', 'avatar', 'TEXT');
+    this.ensureColumn('users', 'cover', 'TEXT');
+    this.ensureColumn('users', 'bio', "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn('users', 'created_at', 'INTEGER NOT NULL DEFAULT 0');
+    this.ensureColumn('users', 'last_seen', 'INTEGER NOT NULL DEFAULT 0');
+
+    this.ensureColumn('conversations', 'last_message', "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn('conversations', 'last_message_at', 'INTEGER NOT NULL DEFAULT 0');
+    this.ensureColumn('conversations', 'unread_a', 'INTEGER NOT NULL DEFAULT 0');
+    this.ensureColumn('conversations', 'unread_b', 'INTEGER NOT NULL DEFAULT 0');
+    this.ensureColumn('conversations', 'updated_at', 'INTEGER NOT NULL DEFAULT 0');
+
+    sql.exec(`CREATE INDEX IF NOT EXISTS idx_users_name ON users(name COLLATE NOCASE);`);
+    sql.exec(`CREATE INDEX IF NOT EXISTS idx_conversations_user_a ON conversations(user_a);`);
+    sql.exec(`CREATE INDEX IF NOT EXISTS idx_conversations_user_b ON conversations(user_b);`);
+  }
+
+  ensureColumn(table, column, definition) {
+    const rows = this.ctx.storage.sql.exec(`PRAGMA table_info(${table})`).toArray();
+    if (!rows.some(r => r.name === column)) {
+      this.ctx.storage.sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
   }
 
   user(id) {
