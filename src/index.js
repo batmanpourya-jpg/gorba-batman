@@ -262,15 +262,27 @@ export class ChatRoom extends DurableObject {
     super(ctx, env);
     this.ctx = ctx;
     this.env = env;
-    ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS messages(
-      id TEXT PRIMARY KEY,
-      sender_id TEXT NOT NULL,
-      receiver_id TEXT NOT NULL,
-      text TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      deleted INTEGER NOT NULL DEFAULT 0
-    );`);
-    ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(sender_id,receiver_id,created_at);");
+    ctx.blockConcurrencyWhile(async () => {
+      const sql = this.ctx.storage.sql;
+      sql.exec(`CREATE TABLE IF NOT EXISTS messages(
+        id TEXT PRIMARY KEY,
+        sender_id TEXT NOT NULL,
+        receiver_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        deleted INTEGER NOT NULL DEFAULT 0,
+        reply_to_id TEXT,
+        edited INTEGER NOT NULL DEFAULT 0,
+        edited_at INTEGER,
+        read_at INTEGER,
+        pinned INTEGER NOT NULL DEFAULT 0
+      );`);
+      const cols = sql.exec('PRAGMA table_info(messages)').toArray();
+      const add = (c,d) => { if (!cols.some(r => r.name === c)) sql.exec(`ALTER TABLE messages ADD COLUMN ${c} ${d}`); };
+      add('reply_to_id','TEXT'); add('edited','INTEGER NOT NULL DEFAULT 0'); add('edited_at','INTEGER'); add('read_at','INTEGER'); add('pinned','INTEGER NOT NULL DEFAULT 0');
+      sql.exec("CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(sender_id,receiver_id,created_at);");
+      sql.exec("CREATE INDEX IF NOT EXISTS idx_messages_reply ON messages(reply_to_id);");
+    });
   }
 
   socketsFor(a, b) {
@@ -295,7 +307,7 @@ export class ChatRoom extends DurableObject {
         const a = url.searchParams.get("a") || "", b = url.searchParams.get("b") || "";
         if (!a || !b || a === b) return json({ ok: false, error: "چت نامعتبر" }, 400);
         const rows = this.ctx.storage.sql.exec(
-          "SELECT id,sender_id,receiver_id,text,created_at,deleted FROM messages WHERE (sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?) ORDER BY created_at ASC,id ASC LIMIT 500",
+          "SELECT id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned FROM messages WHERE (sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?) ORDER BY created_at ASC,id ASC LIMIT 500",
           a, b, b, a
         ).toArray();
         return json({ ok: true, messages: rows });
@@ -304,13 +316,14 @@ export class ChatRoom extends DurableObject {
       if (req.method === "POST" && url.pathname === "/send") {
         const body = await req.json();
         const sender = String(body.sender_id || ""), receiver = String(body.receiver_id || ""), text = cleanMsg(body.text);
+        const reply_to_id = body.reply_to_id ? String(body.reply_to_id) : null;
         if (!sender || !receiver || sender === receiver || !text) return json({ ok: false, error: "پیام نامعتبر است" }, 400);
         const id = uid(), now = Date.now();
         this.ctx.storage.sql.exec(
-          "INSERT INTO messages(id,sender_id,receiver_id,text,created_at,deleted) VALUES(?,?,?,?,?,0)",
-          id, sender, receiver, text, now
+          "INSERT INTO messages(id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned) VALUES(?,?,?,?,?,0,?,0,NULL,NULL,0)",
+          id, sender, receiver, text, now, reply_to_id
         );
-        const message = { id, sender_id: sender, receiver_id: receiver, text, created_at: now, deleted: 0 };
+        const message = { id, sender_id: sender, receiver_id: receiver, text, created_at: now, deleted: 0, reply_to_id, edited: 0, edited_at: null, read_at: null, pinned: 0 };
         await this.env.DIRECTORY.get(this.env.DIRECTORY.idFromName("main")).fetch(
           new Request("https://internal/message-event", {
             method: "POST",
@@ -322,6 +335,45 @@ export class ChatRoom extends DurableObject {
           try { ws.send(JSON.stringify({ type: "message", message })); } catch {}
         }
         return json({ ok: true, message });
+      }
+
+      if (req.method === "POST" && url.pathname === "/read-message") {
+        const body = await req.json();
+        const id = String(body.id || ""), requester = String(body.requester || "");
+        const rows = this.ctx.storage.sql.exec("SELECT * FROM messages WHERE id=? LIMIT 1", id).toArray();
+        const m = rows[0];
+        if (!m) return json({ ok:false, error:"پیام پیدا نشد" },404);
+        if (m.receiver_id !== requester) return json({ok:false,error:"دسترسی ندارید"},403);
+        const at=Date.now(); this.ctx.storage.sql.exec("UPDATE messages SET read_at=? WHERE id=?",at,id);
+        const out={...m,read_at:at};
+        for(const ws of this.socketsFor(m.sender_id,m.receiver_id)){try{ws.send(JSON.stringify({type:'read',message:out}));}catch{}}
+        return json({ok:true,message:out});
+      }
+
+      if (req.method === "POST" && url.pathname === "/edit") {
+        const body=await req.json(); const id=String(body.id||''), requester=String(body.requester||''), text=cleanMsg(body.text);
+        if(!id||!text) return json({ok:false,error:'متن نامعتبر است'},400);
+        const rows=this.ctx.storage.sql.exec("SELECT * FROM messages WHERE id=? LIMIT 1",id).toArray(); const m=rows[0];
+        if(!m) return json({ok:false,error:'پیام پیدا نشد'},404); if(m.sender_id!==requester) return json({ok:false,error:'فقط فرستنده می‌تواند ویرایش کند'},403); if(m.deleted) return json({ok:false,error:'پیام حذف شده است'},400);
+        const at=Date.now(); this.ctx.storage.sql.exec("UPDATE messages SET text=?,edited=1,edited_at=? WHERE id=?",text,at,id);
+        const out={...m,text,edited:1,edited_at:at}; for(const ws of this.socketsFor(m.sender_id,m.receiver_id)){try{ws.send(JSON.stringify({type:'edited',message:out}));}catch{}}
+        return json({ok:true,message:out});
+      }
+
+      if (req.method === "POST" && url.pathname === "/pin") {
+        const body=await req.json(); const id=String(body.id||''), requester=String(body.requester||''), pinned=!!body.pinned;
+        const rows=this.ctx.storage.sql.exec("SELECT * FROM messages WHERE id=? LIMIT 1",id).toArray(); const m=rows[0];
+        if(!m) return json({ok:false,error:'پیام پیدا نشد'},404); if(m.sender_id!==requester && m.receiver_id!==requester) return json({ok:false,error:'دسترسی ندارید'},403);
+        this.ctx.storage.sql.exec("UPDATE messages SET pinned=? WHERE id=?",pinned?1:0,id); const out={...m,pinned:pinned?1:0};
+        for(const ws of this.socketsFor(m.sender_id,m.receiver_id)){try{ws.send(JSON.stringify({type:'pinned',message:out}));}catch{}}
+        return json({ok:true,message:out,pinned:pinned?1:0});
+      }
+
+      if (req.method === "GET" && url.pathname === "/search-messages") {
+        const a=String(url.searchParams.get('a')||''), b=String(url.searchParams.get('b')||''), q=String(url.searchParams.get('q')||'').trim();
+        if(!a||!b||!q) return json({ok:true,messages:[]}); const like='%'+q.replace(/[\%_]/g,m=>'\\'+m)+'%';
+        const rows=this.ctx.storage.sql.exec("SELECT id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned FROM messages WHERE ((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)) AND text LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT 50",a,b,b,a,like).toArray();
+        return json({ok:true,messages:rows});
       }
 
       if (req.method === "POST" && url.pathname === "/delete") {
@@ -346,9 +398,19 @@ export class ChatRoom extends DurableObject {
     }
   }
 
-  // Hibernation-compatible handlers. Clients only send data through /api/send,
-  // but these methods make the WebSocket server safe for Cloudflare hibernation.
-  webSocketMessage() {}
+  // Hibernation-compatible real-time events (typing indicator).
+  webSocketMessage(ws, message) {
+    try {
+      const data = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message));
+      if (data.type !== 'typing') return;
+      const att = ws.deserializeAttachment() || {};
+      for (const peer of this.socketsForPair(att.pair)) {
+        if (peer === ws) continue;
+        try { peer.send(JSON.stringify({ type: 'typing', show: !!data.show })); } catch {}
+      }
+    } catch {}
+  }
+  socketsForPair(pair) { return this.ctx.getWebSockets().filter(x => x.deserializeAttachment()?.pair === pair); }
   webSocketClose() {}
   webSocketError() {}
 }
@@ -393,15 +455,21 @@ export default {
           }));
         }
 
-        if (url.pathname === "/api/delete") {
+        if (["/api/read-message","/api/edit","/api/pin","/api/delete"].includes(url.pathname)) {
           const body = await req.clone().json();
-          const a = String(body.sender_id || body.requester || ""), b = String(body.receiver_id || "");
-          const chatId = body.chat_id || (a && b ? pairKey(a, b) : "");
-          if (!chatId) return json({ ok: false, error: "شناسه چت نامعتبر" }, 400);
+          const a = String(body.sender_id || body.requester || body.me || ""), b = String(body.receiver_id || body.other || "");
+          const chatId = body.chat_id || (a && b ? pairKey(a,b) : "");
+          if (!chatId) return json({ok:false,error:"شناسه چت نامعتبر"},400);
           const chat = env.CHAT.get(env.CHAT.idFromName(chatId));
-          return chat.fetch(new Request("https://internal/delete", {
-            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body)
-          }));
+          const target = url.pathname.replace('/api','');
+          return chat.fetch(new Request("https://internal"+target,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}));
+        }
+
+        if (url.pathname === "/api/search-messages") {
+          const a=url.searchParams.get('a')||'', b=url.searchParams.get('b')||'';
+          if(!a||!b) return json({ok:false,error:'چت نامعتبر'},400);
+          const chat=env.CHAT.get(env.CHAT.idFromName(pairKey(a,b)));
+          return chat.fetch(new Request("https://internal/search-messages"+url.search));
         }
 
         if (url.pathname === "/api/ws") {

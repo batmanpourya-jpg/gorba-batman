@@ -1,271 +1,36 @@
 const $ = s => document.querySelector(s);
-let me = null, current = null, ws = null, presenceTimer = null, peopleTimer = null, searchTimer = null;
-try { me = JSON.parse(localStorage.getItem('gb_me') || 'null'); } catch { localStorage.removeItem('gb_me'); }
-
-async function api(url, opt = {}) {
-  const r = await fetch(url, {
-    ...opt,
-    headers: { ...(opt.body ? { 'content-type': 'application/json' } : {}), ...(opt.headers || {}) }
-  });
-  const d = await r.json().catch(() => ({ ok: false, error: 'پاسخ نامعتبر' }));
-  if (!r.ok || d.ok === false) throw Error(d.error || 'خطا');
-  return d;
-}
-
-function av(el, u) {
-  el.innerHTML = '';
-  if (u?.avatar) {
-    const img = document.createElement('img');
-    img.src = u.avatar;
-    img.alt = '';
-    el.append(img);
-  } else el.textContent = String(u?.name || '?').slice(0, 1);
-}
-
-function enter() {
-  if (!me) return;
-  $('#auth').classList.add('hidden');
-  $('#app').classList.remove('hidden');
-  $('#myName').textContent = me.name;
-  av($('#myAvatar'), me);
-  loadChats();
-  presence();
-  clearInterval(presenceTimer);
-  clearInterval(peopleTimer);
-  presenceTimer = setInterval(presence, 20000);
-  peopleTimer = setInterval(loadChats, 15000);
-}
-
-async function login() {
-  const name = $('#name').value.trim();
-  if (!name) return $('#err').textContent = 'نام را وارد کن';
-  $('#err').textContent = 'در حال ورود…';
-  try {
-    const d = await api('/api/login', { method: 'POST', body: JSON.stringify({ name }) });
-    me = d.user;
-    localStorage.setItem('gb_me', JSON.stringify(me));
-    enter();
-  } catch (e) { $('#err').textContent = e.message; }
-}
-
-function person(u) {
-  const el = document.createElement('div');
-  el.className = 'person';
-  const a = document.createElement('div'); a.className = 'avatar'; av(a, u);
-  const box = document.createElement('div'); box.className = 'grow';
-  const b = document.createElement('b'); b.textContent = u.name;
-  const s = document.createElement('small');
-  s.innerHTML = `<span class="dot ${u.online ? 'on' : ''}"></span>${u.online ? 'آنلاین' : 'آفلاین'} · شروع گفتگو`;
-  box.append(b, s); el.append(a, box); el.onclick = () => openChat(u);
-  return el;
-}
-
-$('#search').oninput = () => {
-  clearTimeout(searchTimer);
-  const q = $('#search').value.trim();
-  if (!q) { $('#results').innerHTML = ''; return; }
-  searchTimer = setTimeout(async () => {
-    try {
-      const d = await api('/api/search?q=' + encodeURIComponent(q));
-      $('#results').innerHTML = '';
-      const users = d.users.filter(u => u.id !== me.id);
-      if (!users.length) { $('#results').innerHTML = '<div class="empty-list">کسی پیدا نشد</div>'; return; }
-      users.forEach(u => $('#results').append(person(u)));
-    } catch { $('#results').innerHTML = '<div class="empty-list">خطا در جستجو</div>'; }
-  }, 180);
-};
-
-function chatItem(c) {
-  const el = document.createElement('div');
-  el.className = 'chatitem' + (current?.id === c.user.id ? ' selected' : '');
-  const a = document.createElement('div'); a.className = 'avatar'; av(a, c.user);
-  const box = document.createElement('div'); box.className = 'grow';
-  const b = document.createElement('b'); b.textContent = c.user.name;
-  const s = document.createElement('small');
-  const preview = c.last_message || 'هنوز پیامی نیست · برای شروع لمس کن';
-  s.innerHTML = `<span class="dot ${c.user.online ? 'on' : ''}"></span>${escapeHtml(preview)}${c.last_message_at ? ' · ' + new Date(c.last_message_at).toLocaleTimeString('fa-IR', {hour:'2-digit', minute:'2-digit'}) : ''}`;
-  box.append(b, s); el.append(a, box);
-  if (c.unread > 0) {
-    const n = document.createElement('span'); n.className = 'unread'; n.textContent = c.unread > 99 ? '99+' : c.unread; el.append(n);
-  }
-  el.onclick = () => openChat(c.user);
-  return el;
-}
-
-function escapeHtml(v) {
-  const d = document.createElement('div'); d.textContent = String(v); return d.innerHTML;
-}
-
-async function loadChats() {
-  if (!me) return;
-  try {
-    const d = await api('/api/conversations?id=' + encodeURIComponent(me.id));
-    $('#chats').innerHTML = '';
-    if (!d.conversations.length) {
-      $('#chats').innerHTML = '<div class="empty-list">هنوز کسی وارد گوربا بتمن نشده.</div>';
-      return;
-    }
-    // Every registered person is shown here automatically. Search is optional.
-    d.conversations.forEach(c => $('#chats').append(chatItem(c)));
-  } catch (e) {
-    $('#chats').innerHTML = '<div class="empty-list">خطا در بارگذاری گفتگوها</div>';
-  }
-}
-
-function bubble(m) {
-  const wrap = document.createElement('div');
-  wrap.className = 'bubble-wrap ' + (m.sender_id === me.id ? 'mine-wrap' : 'theirs-wrap');
-  wrap.dataset.messageId = m.id;
-  const d = document.createElement('div');
-  d.className = 'bubble ' + (m.sender_id === me.id ? 'mine' : 'theirs') + (m.deleted ? ' deleted' : '');
-  d.textContent = m.deleted ? 'پیام حذف شد' : m.text;
-  d.title = new Date(m.created_at).toLocaleString('fa-IR');
-  if (m.sender_id === me.id && !m.deleted) {
-    d.onclick = () => { if (confirm('این پیام حذف شود؟')) deleteMessage(m); };
-  }
-  const t = document.createElement('div'); t.className = 'time';
-  t.textContent = new Date(m.created_at).toLocaleTimeString('fa-IR', {hour:'2-digit', minute:'2-digit'});
-  wrap.append(d, t); return wrap;
-}
-
-function renderDeleted(id) {
-  const node = [...$('#messages').children()].find(n => n.dataset.messageId === id);
-  if (!node) return;
-  const b = node.querySelector('.bubble');
-  if (b) { b.textContent = 'پیام حذف شد'; b.classList.add('deleted'); b.onclick = null; }
-}
-
-async function openChat(u) {
-  if (!u || u.id === me.id) return;
-  current = u;
-  $('#side').classList.remove('open');
-  $('#empty').classList.add('hidden');
-  $('#chat').classList.remove('hidden');
-  av($('#chatAvatar'), u);
-  $('#chatName').textContent = u.name;
-  setStatus(u);
-  $('#messages').innerHTML = '<div class="empty-list">در حال باز کردن گفتگو…</div>';
-  if (ws) { try { ws.close(); } catch {} ws = null; }
-
-  try {
-    await api('/api/conversation', { method: 'POST', body: JSON.stringify({ me: me.id, other: u.id }) });
-    const d = await api(`/api/history?a=${encodeURIComponent(me.id)}&b=${encodeURIComponent(u.id)}`);
-    $('#messages').innerHTML = '';
-    if (!d.messages.length) $('#messages').innerHTML = '<div class="empty-list">اولین پیام را تو بفرست 👋</div>';
-    d.messages.forEach(m => $('#messages').append(bubble(m)));
-    scrollBottom();
-    await api('/api/read', { method:'POST', body: JSON.stringify({me:me.id, other:u.id}) });
-    loadChats();
-
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(`${proto}://${location.host}/api/ws?a=${encodeURIComponent(me.id)}&b=${encodeURIComponent(u.id)}`);
-    ws.onopen = () => setStatus(current);
-    ws.onmessage = e => {
-      try {
-        const d = JSON.parse(e.data);
-        if (d.type === 'message') {
-          const m = d.message;
-          const belongs = current && ((m.sender_id === me.id && m.receiver_id === current.id) || (m.receiver_id === me.id && m.sender_id === current.id));
-          if (belongs) {
-            const empty = $('#messages').querySelector('.empty-list'); if (empty) empty.remove();
-            // Avoid duplicate delivery to a tab that already rendered the message.
-            if (!document.querySelector(`[data-message-id="${CSS.escape(m.id)}"]`)) $('#messages').append(bubble(m));
-            scrollBottom();
-            if (m.receiver_id === me.id) api('/api/read', {method:'POST', body:JSON.stringify({me:me.id,other:current.id})}).catch(()=>{});
-          }
-          loadChats();
-        }
-        if (d.type === 'deleted') { renderDeleted(d.id); loadChats(); }
-      } catch {}
-    };
-    ws.onclose = () => {};
-  } catch (e) {
-    $('#messages').innerHTML = `<div class="empty-list">${escapeHtml(e.message)}</div>`;
-  }
-}
-
-function setStatus(u) {
-  $('#chatStatus').innerHTML = `<span class="dot ${u.online ? 'on' : ''}"></span>${u.online ? 'آنلاین' : 'آفلاین'}`;
-}
-
-function scrollBottom() { const m = $('#messages'); m.scrollTop = m.scrollHeight; }
-
-async function send() {
-  if (!current) return;
-  const text = $('#text').value.trim();
-  if (!text) return;
-  $('#text').value = '';
-  try {
-    const d = await api('/api/send', { method:'POST', body:JSON.stringify({sender_id:me.id,receiver_id:current.id,text}) });
-    // If the WebSocket is not connected, HTTP response keeps this tab usable.
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      const empty = $('#messages').querySelector('.empty-list'); if (empty) empty.remove();
-      $('#messages').append(bubble(d.message)); scrollBottom();
-    }
-    loadChats();
-  } catch (e) { $('#text').value = text; alert(e.message); }
-}
-
-async function deleteMessage(m) {
-  try {
-    await api('/api/delete', { method:'POST', body:JSON.stringify({id:m.id,requester:me.id,chat_id:pairKey(m.sender_id,m.receiver_id)}) });
-    renderDeleted(m.id); loadChats();
-  } catch (e) { alert(e.message); }
-}
-
-function pairKey(a,b) { return [String(a),String(b)].sort().join(':'); }
-async function presence() { if (me) api('/api/presence?id=' + encodeURIComponent(me.id), {method:'POST'}).catch(()=>{}); }
-
-function openProfile() {
-  $('#profileName').value = me.name;
-  $('#profileBio').value = me.bio || '';
-  $('#avatarFile').value = '';
-  $('#profileErr').textContent = '';
-  $('#profileBox').classList.remove('hidden');
-}
-
-async function imageData(file) {
-  if (!file) return null;
-  return new Promise((resolve,reject)=>{
-    const r = new FileReader();
-    r.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const c = document.createElement('canvas'), max = 256;
-        const scale = Math.min(1, max / Math.max(img.width, img.height));
-        c.width = Math.max(1, Math.round(img.width * scale));
-        c.height = Math.max(1, Math.round(img.height * scale));
-        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-        resolve(c.toDataURL('image/jpeg', .78));
-      };
-      img.onerror = reject; img.src = r.result;
-    };
-    r.onerror = reject; r.readAsDataURL(file);
-  });
-}
-
-async function saveProfile() {
-  try {
-    $('#profileErr').textContent = 'در حال ذخیره…';
-    const avatar = await imageData($('#avatarFile').files[0]);
-    const d = await api('/api/profile', {method:'POST', body:JSON.stringify({
-      id:me.id, name:$('#profileName').value, bio:$('#profileBio').value, ...(avatar ? {avatar} : {})
-    })});
-    me = d.user; localStorage.setItem('gb_me', JSON.stringify(me));
-    $('#profileBox').classList.add('hidden'); enter();
-  } catch (e) { $('#profileErr').textContent = e.message; }
-}
-
-$('#login').onclick = login;
-$('#name').onkeydown = e => { if (e.key === 'Enter') login(); };
-$('#send').onclick = send;
-$('#text').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } };
-$('#logout').onclick = () => { if (ws) try { ws.close(); } catch {} clearInterval(presenceTimer); clearInterval(peopleTimer); localStorage.removeItem('gb_me'); location.reload(); };
-$('#profileBtn').onclick = openProfile;
-$('#closeProfile').onclick = () => $('#profileBox').classList.add('hidden');
-$('#saveProfile').onclick = saveProfile;
-$('#mobileOpen').onclick = () => $('#side').classList.add('open');
-$('#mobileOpen2').onclick = () => $('#side').classList.add('open');
-$('#mobileClose').onclick = () => $('#side').classList.remove('open');
-
-if (me) enter();
+let me=null,current=null,ws=null,presenceTimer=null,peopleTimer=null,searchTimer=null,chatSearchTimer=null,replyingTo=null,editingId=null,typingTimer=null;
+try{me=JSON.parse(localStorage.getItem('gb_me')||'null')}catch{localStorage.removeItem('gb_me')}
+async function api(url,opt={}){const r=await fetch(url,{...opt,headers:{...(opt.body?{'content-type':'application/json'}:{}),...(opt.headers||{})}});const d=await r.json().catch(()=>({ok:false,error:'پاسخ نامعتبر'}));if(!r.ok||d.ok===false)throw Error(d.error||'خطا');return d}
+function av(el,u){if(!el)return;el.innerHTML='';if(u?.avatar){const i=document.createElement('img');i.src=u.avatar;i.alt='';el.append(i)}else el.textContent=String(u?.name||'?').slice(0,1)}
+function enter(){if(!me)return;$('#auth')?.classList.add('hidden');$('#app')?.classList.remove('hidden');$('#myName').textContent=me.name;av($('#myAvatar'),me);loadChats();presence();clearInterval(presenceTimer);clearInterval(peopleTimer);presenceTimer=setInterval(presence,20000);peopleTimer=setInterval(loadChats,15000)}
+async function login(){const name=$('#name').value.trim();if(!name){$('#err').textContent='نام را وارد کن';return}$('#err').textContent='در حال ورود…';try{const d=await api('/api/login',{method:'POST',body:JSON.stringify({name})});me=d.user;localStorage.setItem('gb_me',JSON.stringify(me));enter()}catch(e){$('#err').textContent=e.message}}
+function person(u){const el=document.createElement('div');el.className='person';const a=document.createElement('div');a.className='avatar';av(a,u);const box=document.createElement('div');box.className='grow';const b=document.createElement('b');b.textContent=u.name;const s=document.createElement('small');s.innerHTML=`<span class="dot ${u.online?'on':''}"></span>${u.online?'آنلاین':'آفلاین'} · شروع گفتگو`;box.append(b,s);el.append(a,box);el.onclick=()=>openChat(u);return el}
+function escapeHtml(v){const d=document.createElement('div');d.textContent=String(v);return d.innerHTML}
+if($('#search'))$('#search').oninput=()=>{clearTimeout(searchTimer);const q=$('#search').value.trim();if(!q){$('#results').innerHTML='';return}searchTimer=setTimeout(async()=>{try{const d=await api('/api/search?q='+encodeURIComponent(q));$('#results').innerHTML='';const users=d.users.filter(u=>u.id!==me.id);if(!users.length){$('#results').innerHTML='<div class="empty-list">کسی پیدا نشد</div>';return}users.forEach(u=>$('#results').append(person(u)))}catch{$('#results').innerHTML='<div class="empty-list">خطا در جستجو</div>'}},180)};
+function chatItem(c){const el=document.createElement('div');el.className='chatitem'+(current?.id===c.user.id?' selected':'');const a=document.createElement('div');a.className='avatar';av(a,c.user);const box=document.createElement('div');box.className='grow';const b=document.createElement('b');b.textContent=c.user.name;const s=document.createElement('small');const preview=c.last_message||'هنوز پیامی نیست · برای شروع لمس کن';s.innerHTML=`<span class="dot ${c.user.online?'on':''}"></span>${escapeHtml(preview)}${c.last_message_at?' · '+new Date(c.last_message_at).toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit'}):''}`;box.append(b,s);el.append(a,box);if(c.unread>0){const n=document.createElement('span');n.className='unread';n.textContent=c.unread>99?'99+':c.unread;el.append(n)}el.onclick=()=>openChat(c.user);return el}
+async function loadChats(){if(!me)return;try{const d=await api('/api/conversations?id='+encodeURIComponent(me.id));$('#chats').innerHTML='';if(!d.conversations.length){$('#chats').innerHTML='<div class="empty-list">هنوز کسی وارد گوربا بتمن نشده.</div>';return}d.conversations.forEach(c=>$('#chats').append(chatItem(c)))}catch{$('#chats').innerHTML='<div class="empty-list">خطا در بارگذاری گفتگوها</div>'}}
+function actionButtons(m){if(m.deleted)return null;const row=document.createElement('div');row.className='msg-actions';[['↩','پاسخ',()=>startReply(m)],['✎','ویرایش',()=>startEdit(m)],['📌',m.pinned?'برداشتن سنجاق':'سنجاق',()=>togglePin(m)],['⌫','حذف',()=>deleteMessage(m)]].forEach(([txt,title,fn])=>{if((txt==='✎'||txt==='⌫')&&m.sender_id!==me.id)return;const b=document.createElement('button');b.textContent=txt;b.title=title;b.onclick=e=>{e.stopPropagation();fn()};row.append(b)});return row}
+function bubble(m){const wrap=document.createElement('div');wrap.className='bubble-wrap '+(m.sender_id===me.id?'mine-wrap':'theirs-wrap');wrap.dataset.messageId=m.id;const d=document.createElement('div');d.className='bubble '+(m.sender_id===me.id?'mine':'theirs')+(m.deleted?' deleted':'')+(m.pinned?' pinned':'');if(m.reply_to_id&&!m.deleted){const r=document.createElement('div');r.className='reply-preview';r.textContent='پاسخ به پیام';d.append(r)}const text=document.createElement('div');text.textContent=m.deleted?'پیام حذف شد':m.text;d.append(text);if(m.edited&&!m.deleted){const ed=document.createElement('span');ed.className='edited';ed.textContent=' ویرایش‌شده';d.append(ed)}const meta=document.createElement('div');meta.className='time';let ticks='';if(m.sender_id===me.id)ticks=m.read_at?' ✓✓':' ✓';meta.textContent=new Date(m.created_at).toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit'})+ticks;wrap.append(d,meta);const actions=actionButtons(m);if(actions)wrap.append(actions);return wrap}
+function replaceBubble(m){const old=[...$('#messages').children()].find(n=>n.dataset.messageId===m.id);if(old)old.replaceWith(bubble(m))}
+function renderDeleted(id){const node=[...$('#messages').children()].find(n=>n.dataset.messageId===id);if(node)node.replaceWith(bubble({id,deleted:1,sender_id:'',receiver_id:'',text:'',created_at:Date.now()}))}
+function setStatus(u){if($('#chatStatus'))$('#chatStatus').innerHTML=`<span class="dot ${u.online?'on':''}"></span>${u.online?'آنلاین':'آفلاین'}`}
+function scrollBottom(){const m=$('#messages');m.scrollTop=m.scrollHeight}
+function typing(show){if(!ws||ws.readyState!==WebSocket.OPEN)return;try{ws.send(JSON.stringify({type:'typing',show:!!show}))}catch{}}
+async function openChat(u){if(!u||u.id===me.id)return;current=u;replyingTo=null;editingId=null;$('#side')?.classList.remove('open');$('#empty')?.classList.add('hidden');$('#chat')?.classList.remove('hidden');av($('#chatAvatar'),u);$('#chatName').textContent=u.name;setStatus(u);clearComposerState();$('#messages').innerHTML='<div class="empty-list">در حال باز کردن گفتگو…</div>';if(ws){try{ws.close()}catch{}ws=null}try{await api('/api/conversation',{method:'POST',body:JSON.stringify({me:me.id,other:u.id})});const d=await api(`/api/history?a=${encodeURIComponent(me.id)}&b=${encodeURIComponent(u.id)}`);$('#messages').innerHTML='';if(!d.messages.length)$('#messages').innerHTML='<div class="empty-list">اولین پیام را تو بفرست 👋</div>';d.messages.forEach(m=>$('#messages').append(bubble(m)));scrollBottom();await api('/api/read',{method:'POST',body:JSON.stringify({me:me.id,other:u.id})});loadChats();const proto=location.protocol==='https:'?'wss':'ws';ws=new WebSocket(`${proto}://${location.host}/api/ws?a=${encodeURIComponent(me.id)}&b=${encodeURIComponent(u.id)}`);ws.onopen=()=>setStatus(current);ws.onmessage=e=>{try{const d=JSON.parse(e.data);if(d.type==='message'){const m=d.message;if(current&&((m.sender_id===me.id&&m.receiver_id===current.id)||(m.receiver_id===me.id&&m.sender_id===current.id))){$('#messages').querySelector('.empty-list')?.remove();if(![...$('#messages').children].some(n=>n.dataset.messageId===m.id))$('#messages').append(bubble(m));scrollBottom();if(m.receiver_id===me.id){api('/api/read',{method:'POST',body:JSON.stringify({me:me.id,other:current.id})}).catch(()=>{});api('/api/read-message',{method:'POST',body:JSON.stringify({id:m.id,requester:me.id,sender_id:m.sender_id,receiver_id:m.receiver_id,chat_id:pairKey(m.sender_id,m.receiver_id)})}).catch(()=>{})}}loadChats()}else if(d.type==='deleted'){renderDeleted(d.id);loadChats()}else if(d.type==='edited'||d.type==='pinned'||d.type==='read'){if(d.message)replaceBubble(d.message)}else if(d.type==='typing'){if(d.show&&current)$('#chatStatus').textContent='در حال نوشتن…';else if(current)setStatus(current)}}catch{}}}catch(e){$('#messages').innerHTML=`<div class="empty-list">${escapeHtml(e.message)}</div>`}}
+function clearComposerState(){replyingTo=null;editingId=null;if($('#replyBar')){$('#replyBar').classList.add('hidden');$('#replyText').textContent=''}if($('#editBar'))$('#editBar').classList.add('hidden');$('#text').value=''}
+function startReply(m){replyingTo=m;editingId=null;$('#editBar')?.classList.add('hidden');if($('#replyBar')){$('#replyBar').classList.remove('hidden');$('#replyText').textContent=(m.text||'پیام').slice(0,120);$('#text').focus()}}
+function startEdit(m){if(m.sender_id!==me.id||m.deleted)return;editingId=m.id;replyingTo=null;$('#replyBar')?.classList.add('hidden');if($('#editBar'))$('#editBar').classList.remove('hidden');$('#text').value=m.text;$('#text').focus()}
+async function send(){if(!current)return;const text=$('#text').value.trim();if(!text)return;try{if(editingId){const d=await api('/api/edit',{method:'POST',body:JSON.stringify({id:editingId,requester:me.id,text})});replaceBubble(d.message);editingId=null;$('#editBar')?.classList.add('hidden');$('#text').value='';return}const reply=replyingTo?.id||null;$('#text').value='';clearComposerState();const d=await api('/api/send',{method:'POST',body:JSON.stringify({sender_id:me.id,receiver_id:current.id,text,reply_to_id:reply})});if(!ws||ws.readyState!==WebSocket.OPEN){$('#messages').querySelector('.empty-list')?.remove();$('#messages').append(bubble(d.message));scrollBottom()}loadChats()}catch(e){$('#text').value=text;alert(e.message)}}
+async function deleteMessage(m){if(!confirm('این پیام برای همه حذف شود؟'))return;try{await api('/api/delete',{method:'POST',body:JSON.stringify({id:m.id,requester:me.id,chat_id:pairKey(m.sender_id,m.receiver_id)})});renderDeleted(m.id);loadChats()}catch(e){alert(e.message)}}
+async function togglePin(m){try{const d=await api('/api/pin',{method:'POST',body:JSON.stringify({id:m.id,requester:me.id,chat_id:pairKey(m.sender_id,m.receiver_id),pinned:!m.pinned})});replaceBubble(d.message)}catch(e){alert(e.message)}}
+function pairKey(a,b){return[String(a),String(b)].sort().join(':')}
+async function presence(){if(me)api('/api/presence?id='+encodeURIComponent(me.id),{method:'POST'}).catch(()=>{})}
+function searchMessages(){if(!current)return;const q=($('#chatSearch')?.value||'').trim();if(!q){$('#searchResults').innerHTML='';return}clearTimeout(chatSearchTimer);chatSearchTimer=setTimeout(async()=>{try{const d=await api(`/api/search-messages?a=${encodeURIComponent(me.id)}&b=${encodeURIComponent(current.id)}&q=${encodeURIComponent(q)}`);$('#searchResults').innerHTML='';if(!d.messages.length){$('#searchResults').innerHTML='<div class="empty-list">چیزی پیدا نشد</div>';return}d.messages.forEach(m=>{const el=document.createElement('button');el.className='search-hit';el.textContent=m.text||'پیام حذف شد';el.onclick=()=>{const n=[...$('#messages').children].find(x=>x.dataset.messageId===m.id);n?.scrollIntoView({behavior:'smooth',block:'center'})};$('#searchResults').append(el)})}catch{$('#searchResults').innerHTML='<div class="empty-list">خطا در جستجو</div>'}},180)}
+function openProfile(){$('#profileName').value=me.name;$('#profileBio').value=me.bio||'';$('#avatarFile').value='';$('#profileErr').textContent='';$('#profileBox').classList.remove('hidden')}
+async function imageData(file){if(!file)return null;return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>{const img=new Image();img.onload=()=>{const c=document.createElement('canvas'),max=256,scale=Math.min(1,max/Math.max(img.width,img.height));c.width=Math.max(1,Math.round(img.width*scale));c.height=Math.max(1,Math.round(img.height*scale));c.getContext('2d').drawImage(img,0,0,c.width,c.height);resolve(c.toDataURL('image/jpeg',.78))};img.onerror=reject;img.src=r.result};r.onerror=reject;r.readAsDataURL(file)})}
+async function saveProfile(){try{$('#profileErr').textContent='در حال ذخیره…';const avatar=await imageData($('#avatarFile').files[0]);const d=await api('/api/profile',{method:'POST',body:JSON.stringify({id:me.id,name:$('#profileName').value,bio:$('#profileBio').value,...(avatar?{avatar}: {})})});me=d.user;localStorage.setItem('gb_me',JSON.stringify(me));$('#profileBox').classList.add('hidden');enter()}catch(e){$('#profileErr').textContent=e.message}}
+function sendTyping(){typing(true);clearTimeout(typingTimer);typingTimer=setTimeout(()=>typing(false),900)}
+$('#login').onclick=login;$('#name').onkeydown=e=>{if(e.key==='Enter')login()};$('#send').onclick=send;$('#text').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}else sendTyping()};$('#text').onblur=()=>typing(false);$('#logout').onclick=()=>{if(ws)try{ws.close()}catch{}clearInterval(presenceTimer);clearInterval(peopleTimer);localStorage.removeItem('gb_me');location.reload()};$('#profileBtn').onclick=openProfile;$('#closeProfile').onclick=()=>$('#profileBox').classList.add('hidden');$('#saveProfile').onclick=saveProfile;$('#mobileOpen').onclick=()=>$('#side').classList.add('open');$('#mobileOpen2').onclick=()=>$('#side').classList.add('open');$('#mobileClose').onclick=()=>$('#side').classList.remove('open');
+if($('#chatSearch'))$('#chatSearch').oninput=searchMessages;if($('#cancelReply'))$('#cancelReply').onclick=()=>{replyingTo=null;$('#replyBar').classList.add('hidden')};if($('#cancelEdit'))$('#cancelEdit').onclick=()=>{editingId=null;$('#editBar').classList.add('hidden');$('#text').value=''};if($('#closeSearch'))$('#closeSearch').onclick=()=>{$('#searchPanel').classList.add('hidden');$('#chatSearch').value='';$('#searchResults').innerHTML=''};if($('#chatSearchBtn'))$('#chatSearchBtn').onclick=()=>$('#searchPanel').classList.toggle('hidden');
+if(me)enter();
