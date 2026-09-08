@@ -1,8 +1,7 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "gorba-batman",
   "main": "src/index.js",
-  "compatibility_date": "2026-09-07",
+  "compatibility_date": "2026-09-08",
   "assets": {
     "directory": "./public",
     "binding": "ASSETS"
@@ -20,25 +19,20 @@
     ]
   },
   "exports": {
-    "ChatRoom": {
-      "type": "durable-object",
-      "storage": "sqlite"
-    },
-    "ChatRoomV2": {
-      "type": "durable-object",
-      "storage": "sqlite"
-    },
-    "Messenger": {
-      "type": "durable-object",
-      "storage": "sqlite"
-    },
     "Directory": {
-      "type": "durable-object",
-      "storage": "sqlite"
+      "sqlite": "durable_object"
     },
     "UserInbox": {
-      "type": "durable-object",
-      "storage": "sqlite"
+      "sqlite": "durable_object"
+    },
+    "ChatRoom": {
+      "sqlite": "durable_object"
+    },
+    "ChatRoomV2": {
+      "sqlite": "durable_object"
+    },
+    "Messenger": {
+      "sqlite": "durable_object"
     }
   }
 }

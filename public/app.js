@@ -1,36 +1,27 @@
-const $=id=>document.getElementById(id);let me=null,current=null,chats=[],ws=null,toastTimer;
-const api=async(url,opt={})=>{const r=await fetch(url,{...opt,headers:{"content-type":"application/json",...(opt.headers||{})}});let d={};try{d=await r.json()}catch{}if(!r.ok||d.ok===false)throw new Error(d.message||"خطا در ارتباط با سرور");return d};
-function toast(s){const t=$("toast");t.textContent=s||"خطا";t.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove("show"),2600)}
-function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
-function initial(s){return String(s||"؟").trim().charAt(0)||"؟"}
-function meId(){return me?.id||""}
-function saveMe(){if(me?.id)localStorage.setItem("gb_me",JSON.stringify(me));else localStorage.removeItem("gb_me")}
-function setAvatar(el,u){if(!el)return;if(u?.avatar){el.innerHTML=`<img class="avatar-img" src="${esc(u.avatar)}" alt="">`}else{el.textContent=initial(u?.name)}}
-function avatarHtml(u,cls="avatar"){return u?.avatar?`<img class="${cls} avatar-img" src="${esc(u.avatar)}" alt="">`:`<div class="${cls}">${esc(initial(u?.name))}</div>`}
-async function enterApp(){const name=$("nameInput").value.trim();if(name.length<2){toast("نامت را وارد کن");return}try{const d=await api("/api/enter",{method:"POST",body:JSON.stringify({name})});me=d.user;saveMe();await startApp()}catch(e){toast(e.message)}}
-async function startApp(){if(!me?.id){showAuth();return}try{const d=await api("/api/user?id="+encodeURIComponent(me.id));me=d.user;saveMe()}catch{localStorage.removeItem("gb_me");me=null;showAuth();toast("حساب قبلی پیدا نشد؛ دوباره نامت را وارد کن");return}$('auth').hidden=true;$('app').hidden=false;renderMe();await loadChats();connectRealtime()}
-function showAuth(){$('auth').hidden=false;$('app').hidden=true}
-function renderMe(){if(!me)return;$('meName').textContent=me.name||"کاربر";$('meBio').textContent=me.bio||"آنلاین";setAvatar($('meAvatar'),me);setAvatar($('profileAvatar'),me);$('settingsName').textContent=me.name||"کاربر";$('settingsNameInput').value=me.name||"";$('settingsBioInput').value=me.bio||"";const cover=$('settingsCover');cover.style.backgroundImage=me.cover?`url("${me.cover}")`:""}
-async function loadChats(){try{const d=await api("/api/chats?id="+encodeURIComponent(meId()));chats=d.chats||[];renderChats()}catch(e){toast(e.message)}}
-function renderChats(){const box=$("chatList");box.innerHTML="";if(!chats.length){box.innerHTML='<div class="empty">هنوز گفتگویی نداری.<br>از بالا اسم یک نفر را جستجو کن.</div>';return}for(const c of chats){if(!c?.peerId)continue;const row=document.createElement("div");row.className="chat-row";row.innerHTML=`${avatarHtml({name:c.peerName,id:c.peerId,avatar:c.peerAvatar})}<div class="info"><b>${esc(c.peerName||"کاربر")}</b><div class="last">${c.lastMedia&&!c.lastBody?"📷 عکس":esc(c.lastBody||"")}</div></div>${c.unread?`<span class="badge">${c.unread}</span>`:""}`;row.onclick=()=>openChatById(c.peerId);box.appendChild(row)}}
-async function searchUsers(){const q=$("search").value.trim(),box=$("searchResults");if(!q){box.innerHTML="";return}try{const d=await api("/api/search?q="+encodeURIComponent(q));const users=(d.users||[]).filter(u=>u.id!==meId());box.innerHTML=users.map(u=>`<div class="result" data-id="${esc(u.id)}">${avatarHtml(u)}<div><b>${esc(u.name)}</b><span>گفتگوی خصوصی</span></div></div>`).join("")||'<div class="empty">کسی پیدا نشد</div>';box.querySelectorAll(".result").forEach(x=>x.onclick=()=>openChatById(x.dataset.id))}catch(e){toast(e.message)}}
-async function openChatById(id){try{const d=await api("/api/user?id="+encodeURIComponent(id));current=d.user;$('emptyChat').hidden=true;$('chatView').hidden=false;$('peerName').textContent=current.name;$('peerBio').textContent=current.bio||"آنلاین";setAvatar($('peerAvatar'),current);$('search').value="";$('searchResults').innerHTML="";const h=await api(`/api/history?user=${encodeURIComponent(meId())}&peer=${encodeURIComponent(current.id)}`);renderMessages(h.messages||[]);await api("/api/read",{method:"POST",body:JSON.stringify({user:meId(),peer:current.id})});const c=chats.find(x=>x.peerId===current.id);if(c)c.unread=0;renderChats()}catch(e){toast(e.message)}}
-function closeChat(){current=null;$('chatView').hidden=true;$('emptyChat').hidden=false}
-function renderMessages(list){const box=$("messages");box.innerHTML="";for(const m of list)addMessage(m,false);box.scrollTop=box.scrollHeight}
-function addMessage(m,scroll=true){const box=$("messages"),mine=m.from===meId(),el=document.createElement("div");el.className="bubble "+(mine?"out":"in");let content=m.kind==="image"&&m.media?`<img class="message-image" src="${esc(m.media)}" alt="عکس">`:esc(m.body).replace(/\n/g,"<br>");const time=new Date(m.createdAt||Date.now()).toLocaleTimeString("fa-IR",{hour:"2-digit",minute:"2-digit"});el.innerHTML=`<div>${content}</div><div class="time">${time}</div>`;box.appendChild(el);if(scroll)box.scrollTop=box.scrollHeight}
-async function sendMessage(ev){ev.preventDefault();if(!current){toast("اول یک گفتگو را انتخاب کن");return}const input=$("message"),file=$("messageImage"),body=input.value.trim();if(file.files[0]){try{const media=await fileToDataURL(file.files[0],900,900,500000);await sendPayload(body,media);file.value="";input.value=""}catch(e){toast(e.message)}return}if(body)await sendPayload(body,"")}
-async function sendPayload(body,media){try{const d=await api("/api/send",{method:"POST",body:JSON.stringify({from:meId(),to:current.id,body,media})});addMessage(d.message);upsertChat({peerId:current.id,peerName:current.name,peerAvatar:current.avatar,lastBody:body||"📷 عکس",lastMedia:media,lastTime:d.message.createdAt,unread:0});$("message").value=""}catch(e){toast(e.message)}}
-function upsertChat(c){if(!c?.peerId)return;const i=chats.findIndex(x=>x.peerId===c.peerId);if(i>=0)chats[i]={...chats[i],...c};else chats.unshift({chatKey:"",...c});chats.sort((a,b)=>(b.lastTime||0)-(a.lastTime||0));renderChats()}
-function connectRealtime(){if(!meId())return;try{ws?.close()}catch{}const proto=location.protocol==="https:"?"wss":"ws";ws=new WebSocket(`${proto}://${location.host}/ws?user=${encodeURIComponent(meId())}`);ws.onmessage=ev=>{try{const d=JSON.parse(ev.data);if(d.type==="snapshot"){chats=d.chats||[];renderChats()}if(d.type==="message"){upsertChat(d.chat);const m=d.message;if(current?.id===m.from){addMessage(m);api("/api/read",{method:"POST",body:JSON.stringify({user:meId(),peer:m.from})}).catch(()=>{})}else toast(`پیام جدید از ${d.chat?.peerName||"یک دوست"}`)}}catch{}};ws.onclose=()=>{if(meId())setTimeout(connectRealtime,2500)}}
-function toggleTheme(){document.body.classList.toggle("light");const mode=document.body.classList.contains("light")?"روشن":"تیره";localStorage.setItem("gb_theme",mode);$("themeValue").textContent=mode}
-function focusSearch(){$("search")?.focus()}
-function openSettings(){if(!meId()){showAuth();return}renderMe();$("settingsPanel").hidden=false}
-function closeSettings(){$("settingsPanel").hidden=true}
-async function saveProfile(patch={}){const name=patch.name??$("settingsNameInput").value.trim(),bio=patch.bio??$("settingsBioInput").value.trim();if(name.length<2){toast("نام نمایشی حداقل ۲ کاراکتر باشد");return}try{const d=await api("/api/profile",{method:"POST",body:JSON.stringify({id:meId(),name,bio,...patch})});me=d.user;saveMe();renderMe();toast("پروفایل ذخیره شد")}catch(e){toast(e.message)}}
-async function fileToDataURL(file,maxW,maxH,maxBytes){if(!file?.type.startsWith("image/"))throw new Error("لطفاً یک عکس انتخاب کن");const bitmap=await createImageBitmap(file);const scale=Math.min(1,maxW/bitmap.width,maxH/bitmap.height);const c=document.createElement("canvas");c.width=Math.max(1,Math.round(bitmap.width*scale));c.height=Math.max(1,Math.round(bitmap.height*scale));c.getContext("2d").drawImage(bitmap,0,0,c.width,c.height);let q=.82,data=c.toDataURL("image/jpeg",q);while(data.length>maxBytes&&q>.42){q-=.06;data=c.toDataURL("image/jpeg",q)}if(data.length>maxBytes)throw new Error("عکس خیلی بزرگ است");return data}
-async function chooseAvatar(file){try{await saveProfile({avatar:await fileToDataURL(file,360,360,480000)});$("avatarInput").value=""}catch(e){toast(e.message)}}
-async function chooseCover(file){try{await saveProfile({cover:await fileToDataURL(file,1100,500,620000)});$("coverInput").value=""}catch(e){toast(e.message)}}
-function logout(){try{ws?.close()}catch{}localStorage.removeItem("gb_me");me=null;location.reload()}
-$("avatarInput").addEventListener("change",e=>e.target.files[0]&&chooseAvatar(e.target.files[0]));$("coverInput").addEventListener("change",e=>e.target.files[0]&&chooseCover(e.target.files[0]));$("messageImage").addEventListener("change",()=>{if($("messageImage").files[0])toast("عکس آماده ارسال است؛ دکمه ارسال را بزن")});document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));b.classList.add("active");$("chatList").hidden=b.dataset.tab==="groups";$("groupList").hidden=b.dataset.tab!=="groups"});
-if(localStorage.getItem("gb_theme")==="روشن")document.body.classList.add("light");$("themeValue").textContent=document.body.classList.contains("light")?"روشن":"تیره";
-try{const raw=localStorage.getItem("gb_me");if(raw)me=JSON.parse(raw)}catch{me=null}if(me?.id)startApp();else showAuth();
+const $=s=>document.querySelector(s);
+let me=null; try{me=JSON.parse(localStorage.getItem("gb_me")||"null")}catch{localStorage.removeItem("gb_me")}
+async function api(url,opt={}){
+ const r=await fetch(url,{...opt,headers:{"content-type":"application/json",...(opt.headers||{})}});
+ const d=await r.json().catch(()=>({ok:false,error:"پاسخ نامعتبر"}));
+ if(!r.ok||d.ok===false) throw new Error(d.error||"خطا");
+ return d;
+}
+function enter(){
+ if(!me)return;
+ $("#auth").classList.add("hidden");$("#app").classList.remove("hidden");
+ $("#hello").textContent=me.name;$("#avatar").textContent=me.name.slice(0,1);
+}
+async function login(){
+ const name=$("#name").value.trim();
+ if(!name){$("#err").textContent="نام را وارد کن";return}
+ $("#err").textContent="در حال ورود…";
+ try{
+  const d=await api("/api/login",{method:"POST",body:JSON.stringify({name})});
+  if(!d.user||!d.user.id) throw new Error("حساب از سرور دریافت نشد");
+  me=d.user;localStorage.setItem("gb_me",JSON.stringify(me));enter();
+ }catch(e){$("#err").textContent=e.message||"ورود انجام نشد"}
+}
+$("#login").onclick=login;
+$("#name").onkeydown=e=>{if(e.key==="Enter")login()};
+$("#logout").onclick=()=>{localStorage.removeItem("gb_me");location.reload()};
+if(me)enter();
