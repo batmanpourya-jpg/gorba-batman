@@ -33,7 +33,7 @@ export class Directory extends DurableObject {
       bio TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL DEFAULT 0,
       last_seen INTEGER NOT NULL DEFAULT 0
-    );
+    );`);
     sql.exec(`CREATE TABLE IF NOT EXISTS moderation_words(
       id TEXT PRIMARY KEY, word TEXT NOT NULL UNIQUE, warning TEXT NOT NULL DEFAULT 'لطفاً از این کلمه استفاده نکنید.', created_at INTEGER NOT NULL DEFAULT 0
     );`);
