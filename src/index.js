@@ -222,19 +222,20 @@ export class Directory extends DurableObject {
         const body = await req.json();
         const sender = String(body.sender_id || ""), receiver = String(body.receiver_id || "");
         const text = cleanMsg(body.text), now = Number(body.created_at) || Date.now();
-        if (!sender || !receiver || !text) return json({ ok: false, error: "پیام نامعتبر" }, 400);
+        const preview = text || (body.media_type === 'image' ? '📷 عکس' : body.media_type === 'video' ? '🎬 ویدیو' : body.media_type === 'audio' ? '🎤 پیام صوتی' : body.media_name ? '📎 '+String(body.media_name).slice(0,80) : 'فایل');
+        if (!sender || !receiver || (!text && !body.media_id)) return json({ ok:false, error:"پیام نامعتبر" },400);
 
         const old = this.conversation(sender, receiver);
         if (!old) {
           this.ctx.storage.sql.exec(
             "INSERT INTO conversations(pair_key,user_a,user_b,last_message,last_message_at,unread_a,unread_b,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-            pairKey(sender, receiver), sender, receiver, text, now, 0, 1, now
+            pairKey(sender, receiver), sender, receiver, preview, now, 0, 1, now
           );
         } else {
           const unreadColumn = old.user_a === receiver ? "unread_a" : "unread_b";
           this.ctx.storage.sql.exec(
             `UPDATE conversations SET last_message=?,last_message_at=?,updated_at=?,${unreadColumn}=${unreadColumn}+1 WHERE pair_key=?`,
-            text, now, now, old.pair_key
+            preview, now, now, old.pair_key
           );
         }
         return json({ ok: true });
@@ -282,6 +283,17 @@ export class ChatRoom extends DurableObject {
       add('reply_to_id','TEXT'); add('edited','INTEGER NOT NULL DEFAULT 0'); add('edited_at','INTEGER'); add('read_at','INTEGER'); add('pinned','INTEGER NOT NULL DEFAULT 0');
       sql.exec("CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(sender_id,receiver_id,created_at);");
       sql.exec("CREATE INDEX IF NOT EXISTS idx_messages_reply ON messages(reply_to_id);");
+      sql.exec(`CREATE TABLE IF NOT EXISTS media_chunks(
+        media_id TEXT NOT NULL, chunk_no INTEGER NOT NULL, data BLOB NOT NULL,
+        PRIMARY KEY(media_id,chunk_no)
+      );`);
+      sql.exec(`CREATE TABLE IF NOT EXISTS media_files(
+        id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, sender_id TEXT NOT NULL, receiver_id TEXT NOT NULL,
+        name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL DEFAULT 0, type TEXT NOT NULL,
+        created_at INTEGER NOT NULL, duration INTEGER
+      );`);
+      add('media_id','TEXT'); add('media_type','TEXT'); add('media_name','TEXT'); add('media_size','INTEGER'); add('media_mime','TEXT');
+      sql.exec("CREATE INDEX IF NOT EXISTS idx_media_chat ON media_files(chat_id,created_at);");
     });
   }
 
@@ -306,34 +318,39 @@ export class ChatRoom extends DurableObject {
       if (req.method === "GET" && url.pathname === "/history") {
         const a = url.searchParams.get("a") || "", b = url.searchParams.get("b") || "";
         const limit = Math.min(20, Math.max(1, Number(url.searchParams.get("limit") || 4)));
-        const before = Number(url.searchParams.get("before") || 0);
-        if (!a || !b || a === b) return json({ ok: false, error: "چت نامعتبر" }, 400);
+        const beforeAt = Number(url.searchParams.get("before_at") || url.searchParams.get("before") || 0);
+        const beforeId = String(url.searchParams.get("before_id") || "");
+        if (!a || !b || a === b) return json({ ok:false,error:"چت نامعتبر است" },400);
+        const cols="id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned,media_id,media_type,media_name,media_size,media_mime";
         let rows;
-        if (before > 0) {
-          rows = this.ctx.storage.sql.exec(
-            "SELECT id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned FROM messages WHERE ((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)) AND created_at < ? ORDER BY created_at DESC,id DESC LIMIT ?",
-            a, b, b, a, before, limit
+        if (beforeAt) {
+          rows=this.ctx.storage.sql.exec(
+            `SELECT ${cols} FROM messages WHERE ((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)) AND (created_at < ? OR (created_at = ? AND id < ?)) ORDER BY created_at DESC,id DESC LIMIT ?`,
+            a,b,b,a,beforeAt,beforeAt,beforeId,limit
           ).toArray().reverse();
         } else {
-          rows = this.ctx.storage.sql.exec(
-            "SELECT id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned FROM messages WHERE (sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?) ORDER BY created_at DESC,id DESC LIMIT ?",
-            a, b, b, a, limit
-          ).toArray().reverse();
+          rows=this.ctx.storage.sql.exec(`SELECT ${cols} FROM messages WHERE (sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?) ORDER BY created_at DESC,id DESC LIMIT ?`,a,b,b,a,limit).toArray().reverse();
         }
-        return json({ ok: true, messages: rows, has_more: rows.length === limit });
+        const first=rows[0], last=rows[rows.length-1];
+        return json({ok:true,messages:rows,has_more:rows.length===limit,cursor:first?{created_at:first.created_at,id:first.id}:null,next_cursor:last?{created_at:last.created_at,id:last.id}:null});
       }
 
       if (req.method === "POST" && url.pathname === "/send") {
         const body = await req.json();
         const sender = String(body.sender_id || ""), receiver = String(body.receiver_id || ""), text = cleanMsg(body.text);
         const reply_to_id = body.reply_to_id ? String(body.reply_to_id) : null;
-        if (!sender || !receiver || sender === receiver || !text) return json({ ok: false, error: "پیام نامعتبر است" }, 400);
-        const id = uid(), now = Date.now();
+        const media_id = body.media_id ? String(body.media_id) : null;
+        const media_type = body.media_type ? String(body.media_type).slice(0,30) : null;
+        const media_name = body.media_name ? String(body.media_name).slice(0,200) : null;
+        const media_size = Number(body.media_size||0);
+        const media_mime = body.media_mime ? String(body.media_mime).slice(0,120) : null;
+        if (!sender || !receiver || sender === receiver || (!text && !media_id)) return json({ ok:false,error:"پیام نامعتبر است" },400);
+        const id=uid(), now=Date.now();
         this.ctx.storage.sql.exec(
-          "INSERT INTO messages(id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned) VALUES(?,?,?,?,?,0,?,0,NULL,NULL,0)",
-          id, sender, receiver, text, now, reply_to_id
+          "INSERT INTO messages(id,sender_id,receiver_id,text,created_at,deleted,reply_to_id,edited,edited_at,read_at,pinned,media_id,media_type,media_name,media_size,media_mime) VALUES(?,?,?,?,?,0,?,0,NULL,NULL,0,?,?,?,?,?)",
+          id,sender,receiver,text,now,reply_to_id,media_id,media_type,media_name,media_size,media_mime
         );
-        const message = { id, sender_id: sender, receiver_id: receiver, text, created_at: now, deleted: 0, reply_to_id, edited: 0, edited_at: null, read_at: null, pinned: 0 };
+        const message={id,sender_id:sender,receiver_id:receiver,text,created_at:now,deleted:0,reply_to_id,edited:0,edited_at:null,read_at:null,pinned:0,media_id,media_type,media_name,media_size,media_mime};
         await this.env.DIRECTORY.get(this.env.DIRECTORY.idFromName("main")).fetch(
           new Request("https://internal/message-event", {
             method: "POST",
@@ -377,6 +394,36 @@ export class ChatRoom extends DurableObject {
         this.ctx.storage.sql.exec("UPDATE messages SET pinned=? WHERE id=?",pinned?1:0,id); const out={...m,pinned:pinned?1:0};
         for(const ws of this.socketsFor(m.sender_id,m.receiver_id)){try{ws.send(JSON.stringify({type:'pinned',message:out}));}catch{}}
         return json({ok:true,message:out,pinned:pinned?1:0});
+      }
+
+      if (req.method === "POST" && url.pathname === "/upload") {
+        const form=await req.formData();
+        const sender=String(form.get("sender_id")||""), receiver=String(form.get("receiver_id")||"");
+        const file=form.get("file");
+        if(!sender||!receiver||!(file instanceof File)) return json({ok:false,error:"فایل نامعتبر است"},400);
+        const MAX=20*1024*1024; if(file.size>MAX) return json({ok:false,error:"حداکثر حجم فایل ۲۰ مگابایت است"},413);
+        const allowedTypes=new Set(["image","video","audio","file"]);
+        let type=String(form.get("type")||""); if(!allowedTypes.has(type)) type=file.type.startsWith("image/")?"image":file.type.startsWith("video/")?"video":file.type.startsWith("audio/")?"audio":"file";
+        const mediaId=uid(), chatId=pairKey(sender,receiver), now=Date.now(), duration=Number(form.get("duration")||0)||null;
+        const buf=await file.arrayBuffer(), bytes=new Uint8Array(buf), CHUNK=1024*1024;
+        for(let off=0,no=0;off<bytes.length;off+=CHUNK,no++){ this.ctx.storage.sql.exec("INSERT INTO media_chunks(media_id,chunk_no,data) VALUES(?,?,?)",mediaId,no,bytes.slice(off,Math.min(off+CHUNK,bytes.length))); }
+        this.ctx.storage.sql.exec("INSERT INTO media_files(id,chat_id,sender_id,receiver_id,name,mime,size,type,created_at,duration) VALUES(?,?,?,?,?,?,?,?,?,?)",mediaId,chatId,sender,receiver,String(file.name||"file"),String(file.type||"application/octet-stream"),file.size,type,now,duration);
+        return json({ok:true,media:{id:mediaId,chat_id:chatId,sender_id:sender,receiver_id:receiver,name:String(file.name||"file"),mime:String(file.type||"application/octet-stream"),size:file.size,type,created_at:now,duration}});
+      }
+
+      if (req.method === "GET" && url.pathname === "/gallery") {
+        const a=String(url.searchParams.get("a")||""), b=String(url.searchParams.get("b")||"");
+        if(!a||!b) return json({ok:false,error:"چت نامعتبر است"},400);
+        const rows=this.ctx.storage.sql.exec("SELECT id,chat_id,sender_id,receiver_id,name,mime,size,type,created_at,duration FROM media_files WHERE chat_id=? ORDER BY created_at DESC LIMIT 200",pairKey(a,b)).toArray();
+        return json({ok:true,media:rows});
+      }
+
+      if (req.method === "GET" && url.pathname === "/media") {
+        const id=String(url.searchParams.get("id")||""); if(!id) return new Response("Not found",{status:404});
+        const rows=this.ctx.storage.sql.exec("SELECT name,mime,size FROM media_files WHERE id=? LIMIT 1",id).toArray(); const meta=rows[0]; if(!meta) return new Response("Not found",{status:404});
+        const chunks=this.ctx.storage.sql.exec("SELECT data FROM media_chunks WHERE media_id=? ORDER BY chunk_no ASC",id).toArray();
+        const out=new Uint8Array(meta.size); let pos=0; for(const c of chunks){const b=new Uint8Array(c.data);out.set(b,pos);pos+=b.byteLength;}
+        return new Response(out,{headers:{"content-type":meta.mime||"application/octet-stream","content-length":String(out.byteLength),"content-disposition":`inline; filename*=UTF-8''${encodeURIComponent(meta.name)}`,"cache-control":"public,max-age=31536000,immutable"}});
       }
 
       if (req.method === "GET" && url.pathname === "/search-messages") {
@@ -473,6 +520,21 @@ export default {
           const chat = env.CHAT.get(env.CHAT.idFromName(chatId));
           const target = url.pathname.replace('/api','');
           return chat.fetch(new Request("https://internal"+target,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}));
+        }
+
+        if (url.pathname === "/api/upload") {
+          const form=await req.formData(); const a=String(form.get("sender_id")||""),b=String(form.get("receiver_id")||""); if(!a||!b)return json({ok:false,error:"چت نامعتبر"},400);
+          const chat=env.CHAT.get(env.CHAT.idFromName(pairKey(a,b))); return chat.fetch(new Request("https://internal/upload",{method:"POST",body:form}));
+        }
+        if (url.pathname === "/api/gallery") {
+          const a=url.searchParams.get("a")||"",b=url.searchParams.get("b")||""; if(!a||!b)return json({ok:false,error:"چت نامعتبر"},400); const chat=env.CHAT.get(env.CHAT.idFromName(pairKey(a,b))); return chat.fetch(new Request("https://internal/gallery"+url.search));
+        }
+        if (url.pathname === "/api/media") {
+          const id=url.searchParams.get("id")||""; if(!id)return new Response("Not found",{status:404});
+          // media IDs are globally random; locate through a small authenticated-free lookup is not possible across DOs.
+          // The client always supplies the chat pair as a,b.
+          const a=url.searchParams.get("a")||"",b=url.searchParams.get("b")||""; if(!a||!b)return new Response("Missing chat",{status:400});
+          const chat=env.CHAT.get(env.CHAT.idFromName(pairKey(a,b))); return chat.fetch(new Request("https://internal/media?id="+encodeURIComponent(id)));
         }
 
         if (url.pathname === "/api/search-messages") {
