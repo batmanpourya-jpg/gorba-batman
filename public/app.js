@@ -8,6 +8,27 @@ function av(el,u){if(!el)return;el.innerHTML='';if(u?.avatar){const i=document.c
 function enter(){if(!me)return;$('#auth')?.classList.add('hidden');$('#app')?.classList.remove('hidden');$('#myName').textContent=me.name;av($('#myAvatar'),me);loadChats();presence();clearInterval(presenceTimer);clearInterval(peopleTimer);presenceTimer=setInterval(presence,20000);peopleTimer=setInterval(loadChats,15000)}
 async function login(){const name=$('#name').value.trim();if(!name){$('#err').textContent='نام را وارد کن';return}$('#err').textContent='در حال ورود…';try{const d=await api('/api/login',{method:'POST',body:JSON.stringify({name})});me=d.user;localStorage.setItem('gb_me',JSON.stringify(me));enter()}catch(e){$('#err').textContent=e.message}}
 function person(u){const el=document.createElement('div');el.className='person';const a=document.createElement('div');a.className='avatar';av(a,u);const box=document.createElement('div');box.className='grow';const b=document.createElement('b');b.textContent=u.name;const s=document.createElement('small');s.innerHTML=`<span class="dot ${u.online?'on':''}"></span>${u.online?'آنلاین':'آفلاین'} · شروع گفتگو`;box.append(b,s);el.append(a,box);el.onclick=()=>openChat(u);return el}
+
+async function adminLogin7(){
+  const p=prompt('رمز مدیریت را وارد کن'); if(p===null)return;
+  try{await api('/api/admin-login',{method:'POST',body:JSON.stringify({password:p})});openAdminPanel7()}
+  catch(e){alert(e.message)}
+}
+async function openAdminPanel7(){
+  const box=$('#adminBox');if(!box)return;box.classList.remove('hidden');
+  try{
+    const [w,u,a,r]=await Promise.all([api('/api/admin-words'),api('/api/admin-users'),api('/api/admin-actions'),api('/api/admin-reports')]);
+    const wl=$('#adminWords');wl.innerHTML='';
+    (w.words||[]).forEach(x=>{const row=document.createElement('div');row.className='group-person';const t=document.createElement('span');t.className='grow';t.textContent=x.word+' — '+x.warning;const b=document.createElement('button');b.className='ghost';b.textContent='حذف';b.onclick=async()=>{await api('/api/admin-word-delete',{method:'POST',body:JSON.stringify({id:x.id})});openAdminPanel7()};row.append(t,b);wl.append(row)});
+    $('#adminUsers').textContent=(u.users||[]).map(x=>'• '+x.name+' — '+(x.last_seen?new Date(x.last_seen).toLocaleString('fa-IR'):'نامشخص')).join('\n')||'کاربری نیست';
+    $('#adminActions').textContent=(a.actions||[]).map(x=>'• '+x.action+' — '+x.details).join('\n')||'اقدامی ثبت نشده';
+    $('#adminReports').textContent=(r.reports||[]).map(x=>'• '+x.user_id+' — '+x.message).join('\n')||'گزارشی نیست';
+  }catch(e){alert(e.message)}
+}
+async function globalSearch7(){
+  const q=prompt('نام کاربر را وارد کن');if(q===null)return;
+  try{const d=await api('/api/global-search?q='+encodeURIComponent(q));alert((d.users||[]).map(x=>'👤 '+x.name).join('\n')||'کسی پیدا نشد')}catch(e){alert(e.message)}
+}
 function escapeHtml(v){const d=document.createElement('div');d.textContent=String(v);return d.innerHTML}
 if($('#search'))$('#search').oninput=()=>{clearTimeout(searchTimer);const q=$('#search').value.trim();if(!q){$('#results').innerHTML='';return}searchTimer=setTimeout(async()=>{try{const d=await api('/api/search?q='+encodeURIComponent(q));$('#results').innerHTML='';const users=d.users.filter(u=>u.id!==me.id);if(!users.length){$('#results').innerHTML='<div class="empty-list">کسی پیدا نشد</div>';return}users.forEach(u=>$('#results').append(person(u)))}catch{$('#results').innerHTML='<div class="empty-list">خطا در جستجو</div>'}},180)};
 function chatItem(c){const el=document.createElement('div');el.className='chatitem'+(current?.id===c.user.id?' selected':'');const a=document.createElement('div');a.className='avatar';av(a,c.user);const box=document.createElement('div');box.className='grow';const b=document.createElement('b');b.textContent=c.user.name;const s=document.createElement('small');const preview=c.last_message||'هنوز پیامی نیست · برای شروع لمس کن';s.innerHTML=`<span class="dot ${c.user.online?'on':''}"></span>${escapeHtml(preview)}${c.last_message_at?' · '+new Date(c.last_message_at).toLocaleTimeString('fa-IR',{hour:'2-digit',minute:'2-digit'}):''}`;box.append(b,s);el.append(a,box);if(c.unread>0){const n=document.createElement('span');n.className='unread';n.textContent=c.unread>99?'99+':c.unread;el.append(n)}el.onclick=()=>openChat(c.user);return el}
@@ -181,7 +202,29 @@ async function deleteMessage(m){
   try{await api('/api/delete',{method:'POST',body:JSON.stringify({id:m.id,requester:me.id,mode,chat_id:pairKey(m.sender_id,m.receiver_id)})});if(mode==='all')renderDeleted(m.id);else m._hidden=true;const n=Array.from($('#messages').children).find(x=>x.dataset.messageId===m.id);if(mode==='me')n?.remove();loadChats()}catch(e){alert(e.message)}
 }
 async function saveMessage(m){try{await api('/api/save-message',{method:'POST',body:JSON.stringify({user_id:me.id,message_id:m.id,chat_key:pairKey(m.sender_id,m.receiver_id),text:m.text||'',media_id:m.media_id||null})});alert('⭐ پیام ذخیره شد')}catch(e){alert(e.message)}}
-async function openSaved(){try{const d=await api('/api/saved-messages?user_id='+encodeURIComponent(me.id));const out=$('#savedList');out.innerHTML='';(d.messages||[]).forEach(m=>{const b=document.createElement('button');b.className='group-person';b.textContent='⭐ '+(m.text||'رسانه');out.append(b)});if(!out.children.length)out.innerHTML='<div class="empty-list">هنوز پیامی ذخیره نشده</div>';$('#savedBox').classList.remove('hidden')}catch(e){alert(e.message)}}
+async function openSaved(){
+  const box=$('#savedBox'); if(!box)return;
+  try{
+    const d=await api('/api/saved-messages?user_id='+encodeURIComponent(me.id));
+    const host=$('#savedList'); host.innerHTML='';
+    (d.messages||[]).forEach(m=>{
+      const row=document.createElement('div');row.className='group-person';
+      const t=document.createElement('span');t.className='grow';t.textContent='⭐ '+(m.text||'رسانه');
+      const b=document.createElement('button');b.className='primary';b.textContent='ارسال';
+      b.onclick=async()=>{
+        if(!current){alert('اول یک گفتگو را باز کن');return}
+        if(!m.text){alert('ارسال مجدد این رسانه در این نسخه فعال نیست');return}
+        try{
+          await api('/api/send',{method:'POST',body:JSON.stringify({sender_id:me.id,receiver_id:current.id,text:m.text})});
+          box.classList.add('hidden'); await loadHistory(true);
+        }catch(err){alert(err.message)}
+      };
+      row.append(t,b);host.append(row);
+    });
+    if(!host.children.length)host.innerHTML='<div class="empty-list">پیام ذخیره‌شده‌ای نیست</div>';
+    box.classList.remove('hidden');
+  }catch(err){alert(err.message)}
+}
 async function openPinned(){if(!current)return;try{const d=await api(`/api/pinned?a=${encodeURIComponent(me.id)}&b=${encodeURIComponent(current.id)}`);alert(d.messages.length?d.messages.map(x=>'📌 '+(x.text||x.media_name||'پیام')).join('\n'):'پیام سنجاق‌شده‌ای نیست')}catch(e){alert(e.message)}}
 async function togglePin(m){try{const d=await api('/api/pin',{method:'POST',body:JSON.stringify({id:m.id,requester:me.id,chat_id:pairKey(m.sender_id,m.receiver_id),pinned:!m.pinned})});replaceBubble(d.message)}catch(e){alert(e.message)}}
 function pairKey(a,b){return[String(a),String(b)].sort().join(':')}
@@ -270,3 +313,8 @@ bind('#pinnedBtn','click',openPinned);bind('#savedBtn','click',openSaved);bind('
 if(me){enter();loadAppearance();}
 
 bind('#fileBtn','click',chooseFile);bind('#fileInput','change',e=>{const f=e.target.files?.[0];if(f)showFilePreview(f);e.target.value=''});bind('#galleryBtn','click',openGallery);bind('#closeGallery','click',()=>$('#galleryBox')?.classList.add('hidden'));bind('#voiceBtn','click',toggleVoice);
+
+safeBind('#closeSaved','click',()=>$('#savedBox')?.classList.add('hidden'));
+safeBind('#closeAdmin','click',()=>$('#adminBox')?.classList.add('hidden'));
+safeBind('#adminBtn','click',adminLogin7);
+safeBind('#globalSearchBtn','click',globalSearch7);

@@ -10,6 +10,7 @@ const uid = () => crypto.randomUUID();
 const pairKey = (a, b) => [String(a), String(b)].sort().join(":");
 const isOnline = ts => Number(ts || 0) > Date.now() - 45000;
 
+const ADMIN_PASSWORD_HASH="b4edb28913277058d91fb8a5f0f440b20c2c00a4e6a7538176f2fb901362d97a";
 export class Directory extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
@@ -32,7 +33,13 @@ export class Directory extends DurableObject {
       bio TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL DEFAULT 0,
       last_seen INTEGER NOT NULL DEFAULT 0
+    );`    sql.exec(`CREATE TABLE IF NOT EXISTS moderation_words(
+      id TEXT PRIMARY KEY, word TEXT NOT NULL UNIQUE, warning TEXT NOT NULL DEFAULT 'لطفاً از این کلمه استفاده نکنید.', created_at INTEGER NOT NULL DEFAULT 0
     );`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS admin_actions(
+      id TEXT PRIMARY KEY, action TEXT NOT NULL, target_user TEXT NOT NULL DEFAULT '', details TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL DEFAULT 0
+    );`);
+);
     sql.exec(`CREATE TABLE IF NOT EXISTS conversations(
       pair_key TEXT PRIMARY KEY,
       user_a TEXT NOT NULL,
@@ -182,7 +189,7 @@ export class Directory extends DurableObject {
       if (req.method === "GET" && url.pathname === "/search") {
         const q = clean(url.searchParams.get("q"));
         if (!q) return json({ ok: true, users: [] });
-        const like = q.replace(/[\\%_]/g, m => "\\" + m) + "%";
+        const like = "%" + q.replace(/[\\%_]/g, m => "\\" + m) + "%";
         const rows = this.ctx.storage.sql.exec(
           "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image,profile_show_bio,profile_show_last_seen,profile_show_avatar FROM users WHERE name LIKE ? ESCAPE '\\\\' ORDER BY name COLLATE NOCASE LIMIT 30",
           like
@@ -366,6 +373,43 @@ export class Directory extends DurableObject {
         this.ctx.storage.sql.exec("UPDATE users SET profile_show_bio=?,profile_show_last_seen=?,profile_show_avatar=? WHERE id=?",
           b.show_bio?1:0,b.show_last_seen?1:0,b.show_avatar?1:0,uid2);
         return json({ok:true,user:this.decorate(this.user(uid2))});
+      }
+      if(req.method==="POST" && url.pathname==="/admin-login"){
+        const b=await req.json();
+        const h=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(String(b.password||"")));
+        const got=Array.from(new Uint8Array(h)).map(x=>x.toString(16).padStart(2,"0")).join("");
+        return got===ADMIN_PASSWORD_HASH?json({ok:true}):json({ok:false,error:"رمز مدیریت اشتباه است"},401);
+      }
+      if(req.method==="GET" && url.pathname==="/admin-words"){
+        return json({ok:true,words:this.ctx.storage.sql.exec("SELECT * FROM moderation_words ORDER BY created_at DESC").toArray()});
+      }
+      if(req.method==="POST" && url.pathname==="/admin-word-add"){
+        const b=await req.json(),w=String(b.word||"").trim(),warning=String(b.warning||"لطفاً از این کلمه استفاده نکنید.").trim();
+        if(!w)return json({ok:false,error:"کلمه خالی است"},400);
+        this.ctx.storage.sql.exec("INSERT OR IGNORE INTO moderation_words(id,word,warning,created_at) VALUES(?,?,?,?)",uid(),w,warning,Date.now());
+        this.ctx.storage.sql.exec("INSERT INTO admin_actions(id,action,details,created_at) VALUES(?,?,?,?)",uid(),"add_word",w,Date.now());
+        return json({ok:true});
+      }
+      if(req.method==="POST" && url.pathname==="/admin-word-delete"){
+        const b=await req.json();this.ctx.storage.sql.exec("DELETE FROM moderation_words WHERE id=?",String(b.id||""));
+        this.ctx.storage.sql.exec("INSERT INTO admin_actions(id,action,details,created_at) VALUES(?,?,?,?)",uid(),"delete_word",String(b.id||""),Date.now());
+        return json({ok:true});
+      }
+      if(req.method==="GET" && url.pathname==="/admin-users"){
+        return json({ok:true,users:this.ctx.storage.sql.exec("SELECT id,name,avatar,bio,created_at,last_seen FROM users ORDER BY created_at DESC LIMIT 500").toArray()});
+      }
+      if(req.method==="GET" && url.pathname==="/admin-actions"){
+        return json({ok:true,actions:this.ctx.storage.sql.exec("SELECT * FROM admin_actions ORDER BY created_at DESC LIMIT 300").toArray()});
+      }
+      if(req.method==="GET" && url.pathname==="/admin-reports"){
+        return json({ok:true,reports:this.ctx.storage.sql.exec("SELECT * FROM reports ORDER BY created_at DESC LIMIT 300").toArray()});
+      }
+      if(req.method==="POST" && url.pathname==="/resend-saved"){
+        const b=await req.json(); const text=String(b.text||"").trim(), sender=String(b.sender_id||""), receiver=String(b.receiver_id||"");
+        if(!text||!sender||!receiver)return json({ok:false,error:"پیام نامعتبر"},400);
+        const pair=pairKey(sender,receiver);
+        const id=this.env?.CHAT ? null : null;
+        return json({ok:true,pair_key:pair,text});
       }
       if (req.method === "GET" && url.pathname === "/conversations") {
         const me = url.searchParams.get("id") || "";
