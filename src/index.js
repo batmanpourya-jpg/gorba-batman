@@ -110,6 +110,7 @@ export class Directory extends DurableObject {
     this.ensureColumn('reports', 'status', "TEXT NOT NULL DEFAULT 'new'");
     this.ensureColumn('reports', 'resolution', "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn('reports', 'updated_at', 'INTEGER NOT NULL DEFAULT 0');
+    this.ensureColumn('reports', 'message_id', "TEXT NOT NULL DEFAULT ''");
 
     this.ensureColumn('conversations', 'last_message', "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn('conversations', 'last_message_at', 'INTEGER NOT NULL DEFAULT 0');
@@ -386,10 +387,11 @@ export class Directory extends DurableObject {
         const uid2=String(b.user_id||"");
         const target=String(b.target_user||"");
         const message=cleanMsg(String(b.message||"")).slice(0,2000);
+        const messageId=String(b.message_id||"");
         if(!uid2||!message)return json({ok:false,error:"گزارش خالی است"},400);
         this.ctx.storage.sql.exec(
-          "INSERT INTO reports(id,user_id,message,target_user,status,resolution,updated_at,created_at) VALUES(?,?,?,?,?,?,?,?)",
-          uid(),uid2,message,target,"new","",0,Date.now()
+          "INSERT INTO reports(id,user_id,message,target_user,message_id,status,resolution,updated_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+          uid(),uid2,message,target,messageId,"new","",0,Date.now()
         );
         return json({ok:true});
       }
