@@ -72,6 +72,11 @@ export class Directory extends DurableObject {
     this.ensureColumn('users', 'primary_color', "TEXT NOT NULL DEFAULT '#1677ff'");
     this.ensureColumn('users', 'chat_background', "TEXT NOT NULL DEFAULT 'default'");
     this.ensureColumn('users', 'chat_background_image', 'TEXT');
+    // Compatibility with later builds: keep these columns available so an
+    // older stable v5 build can safely run on an already-upgraded namespace.
+    this.ensureColumn('users', 'profile_show_bio', 'INTEGER NOT NULL DEFAULT 1');
+    this.ensureColumn('users', 'profile_show_last_seen', 'INTEGER NOT NULL DEFAULT 1');
+    this.ensureColumn('users', 'profile_show_avatar', 'INTEGER NOT NULL DEFAULT 1');
 
     this.ensureColumn('conversations', 'last_message', "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn('conversations', 'last_message_at', 'INTEGER NOT NULL DEFAULT 0');
@@ -171,7 +176,9 @@ export class Directory extends DurableObject {
       if (req.method === "GET" && url.pathname === "/search") {
         const q = clean(url.searchParams.get("q"));
         if (!q) return json({ ok: true, users: [] });
-        const like = q.replace(/[\\%_]/g, m => "\\" + m) + "%";
+        // Substring search is friendlier for display names and fixes the
+        // common case where a user remembers only part of a name.
+        const like = "%" + q.replace(/[\\%_]/g, m => "\\" + m) + "%";
         const rows = this.ctx.storage.sql.exec(
           "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image FROM users WHERE name LIKE ? ESCAPE '\\\\' ORDER BY name COLLATE NOCASE LIMIT 30",
           like
