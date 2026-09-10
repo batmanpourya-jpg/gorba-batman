@@ -44,7 +44,9 @@ async function openAdminPanel7(){
       del.onclick=async()=>{await adminApi('/api/admin-word-delete',{method:'POST',body:JSON.stringify({id:x.id})});openAdminPanel7()};
       row.append(toggle,del);wl.append(row);
     });
-    $('#adminUsers').innerHTML=(u.users||[]).map(x=>`<div class="admin-row"><div class="avatar">${x.avatar?`<img src="${x.avatar}" alt="">`:escapeHtml((x.name||'?').slice(0,1))}</div><div class="grow"><b>${escapeHtml(x.name)}</b><small>${x.last_seen?'آخرین بازدید: '+new Date(x.last_seen).toLocaleString('fa-IR'):'بدون بازدید'}</small></div><span class="status-pill ${Date.now()-Number(x.last_seen||0)<45000?'on':''}">${Date.now()-Number(x.last_seen||0)<45000?'آنلاین':'آفلاین'}</span></div>`).join('')||'<div class="empty-list">کاربری نیست</div>';
+    $('#adminUsers').innerHTML=(u.users||[]).map(x=>`<div class="admin-row admin-user-row" data-user-id="${escapeHtml(x.id)}"><div class="avatar">${x.avatar?`<img src="${x.avatar}" alt="">`:escapeHtml((x.name||'?').slice(0,1))}</div><div class="grow"><b>${escapeHtml(x.name)}</b><small>${x.status==='blocked'?'⛔ مسدود':'فعال'} · ${x.last_seen?'آخرین بازدید: '+new Date(x.last_seen).toLocaleString('fa-IR'):'بدون بازدید'}</small></div><span class="status-pill ${x.status==='blocked'?'':(Date.now()-Number(x.last_seen||0)<45000?'on':'')}">${x.status==='blocked'?'مسدود':(Date.now()-Number(x.last_seen||0)<45000?'آنلاین':'آفلاین')}</span><button class="ghost user-toggle">${x.status==='blocked'?'فعال‌سازی':'مسدود کردن'}</button><button class="danger user-delete">حذف</button></div>`).join('')||'<div class="empty-list">کاربری نیست</div>';
+    document.querySelectorAll('.user-toggle').forEach(btn=>btn.onclick=async()=>{const row=btn.closest('.admin-user-row');await adminApi('/api/admin-user-toggle',{method:'POST',body:JSON.stringify({id:row.dataset.userId})});openAdminPanel7()});
+    document.querySelectorAll('.user-delete').forEach(btn=>btn.onclick=async()=>{const row=btn.closest('.admin-user-row');if(!confirm('این کاربر و اطلاعات حسابش حذف شود؟'))return;await adminApi('/api/admin-user-delete',{method:'POST',body:JSON.stringify({id:row.dataset.userId})});openAdminPanel7()});
 
     const statusLabel={new:'جدید',in_progress:'در حال پیگیری',closed:'بسته‌شده'};
     $('#adminReports').innerHTML=(r.reports||[]).map(x=>`<div class="admin-report" data-report="${x.id}"><b>گزارش از: ${escapeHtml(x.user_id)}</b><small>هدف: ${escapeHtml(x.target_user||'مشخص نشده')}</small>${x.message_id?`<small>پیام: ${escapeHtml(x.message_id)}</small>`:''}<p>${escapeHtml(x.message)}</p><div class="row"><select class="report-status"><option value="new"${x.status==='new'?' selected':''}>جدید</option><option value="in_progress"${x.status==='in_progress'?' selected':''}>در حال پیگیری</option><option value="closed"${x.status==='closed'?' selected':''}>بسته‌شده</option></select><input class="report-resolution input" placeholder="نتیجه پیگیری" value="${escapeHtml(x.resolution||'')}"><button class="primary report-save">ذخیره</button></div><small>${statusLabel[x.status]||'جدید'}</small></div>`).join('')||'<div class="empty-list">گزارشی نیست</div>';
@@ -167,6 +169,11 @@ async function openGroupInfo(){
   try{
     const d=await api(`/api/group-members?id=${encodeURIComponent(currentGroup.id)}&user=${encodeURIComponent(me.id)}`);
     $('#groupInfoTitle').textContent='👥 '+currentGroup.name;
+    const head=$('#groupInfoTitle').parentElement;
+    let del=$('#groupDeleteBtn');
+    if(!del){del=document.createElement('button');del.id='groupDeleteBtn';del.className='danger';del.textContent='🗑️ حذف گروه';head.append(del);}
+    del.classList.toggle('hidden',currentGroup.me_role!=='owner');
+    del.onclick=async()=>{if(!confirm('گروه حذف شود؟ این کار قابل بازگشت نیست.'))return;try{await api('/api/group-delete',{method:'POST',body:JSON.stringify({group_id:currentGroup.id,actor_id:me.id})});$('#groupInfoBox').classList.add('hidden');currentGroup=null;$('#chat').classList.add('hidden');$('#empty').classList.remove('hidden');await loadChats()}catch(e){$('#groupInfoErr').textContent=e.message}};
     const list=$('#groupMembersList');list.innerHTML='';
     d.members.forEach(m=>{
       const row=document.createElement('div');row.className='group-person';

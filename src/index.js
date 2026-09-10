@@ -105,6 +105,7 @@ export class Directory extends DurableObject {
     this.ensureColumn('users', 'profile_show_bio', 'INTEGER NOT NULL DEFAULT 1');
     this.ensureColumn('users', 'profile_show_last_seen', 'INTEGER NOT NULL DEFAULT 1');
     this.ensureColumn('users', 'profile_show_avatar', 'INTEGER NOT NULL DEFAULT 1');
+    this.ensureColumn('users', 'status', "TEXT NOT NULL DEFAULT 'active'");
     this.ensureColumn('moderation_words', 'active', 'INTEGER NOT NULL DEFAULT 1');
     this.ensureColumn('reports', 'target_user', "TEXT NOT NULL DEFAULT ''");
     this.ensureColumn('reports', 'status', "TEXT NOT NULL DEFAULT 'new'");
@@ -132,14 +133,14 @@ export class Directory extends DurableObject {
 
   user(id) {
     const rows = this.ctx.storage.sql.exec(
-      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image,profile_show_bio,profile_show_last_seen,profile_show_avatar FROM users WHERE id=? LIMIT 1", id
+      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image,profile_show_bio,profile_show_last_seen,profile_show_avatar,status FROM users WHERE id=? LIMIT 1", id
     ).toArray();
     return rows[0] || null;
   }
 
   byName(name) {
     const rows = this.ctx.storage.sql.exec(
-      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image,profile_show_bio,profile_show_last_seen,profile_show_avatar FROM users WHERE name=? LIMIT 1", name
+      "SELECT id,name,avatar,cover,bio,created_at,last_seen,theme,primary_color,chat_background,chat_background_image,profile_show_bio,profile_show_last_seen,profile_show_avatar,status FROM users WHERE name=? LIMIT 1", name
     ).toArray();
     return rows[0] || null;
   }
@@ -180,6 +181,7 @@ export class Directory extends DurableObject {
         if (!name) return json({ ok: false, error: "نام را وارد کنید" }, 400);
 
         let user = this.byName(name);
+        if (user && user.status === 'blocked') return json({ ok:false, error:'این حساب توسط مدیریت مسدود شده است' },403);
         if (!user) {
           const now = Date.now();
           const id = uid();
@@ -343,6 +345,17 @@ export class Directory extends DurableObject {
         return json({ok:true,muted:!!muted});
       }
 
+      if (req.method === "POST" && url.pathname === "/group-delete") {
+        const body=await req.json();
+        const gid=String(body.group_id||""), actor=String(body.actor_id||"");
+        const g=this.groupData(gid,actor);
+        if(!g) return json({ok:false,error:"گروه پیدا نشد یا دسترسی ندارید"},404);
+        if(g.me_role!=="owner") return json({ok:false,error:"فقط سازنده گروه می‌تواند گروه را حذف کند"},403);
+        this.ctx.storage.sql.exec("DELETE FROM group_members WHERE group_id=?",gid);
+        this.ctx.storage.sql.exec("DELETE FROM groups WHERE id=?",gid);
+        return json({ok:true});
+      }
+
       if (req.method === "GET" && url.pathname === "/group-members") {
         const gid=String(url.searchParams.get("id")||""), actor=String(url.searchParams.get("user")||"");
         const g=this.groupData(gid,actor);
@@ -413,7 +426,7 @@ export class Directory extends DurableObject {
         return json({ok:true,token});
       }
       if(req.url && !url.pathname.startsWith("/admin-login")){
-        const adminPaths=["/admin-words","/admin-word-add","/admin-word-delete","/admin-word-toggle","/admin-users","/admin-actions","/admin-reports","/admin-report-update","/admin-stats"];
+        const adminPaths=["/admin-words","/admin-word-add","/admin-word-delete","/admin-word-toggle","/admin-users","/admin-actions","/admin-reports","/admin-report-update","/admin-stats","/admin-user-toggle","/admin-user-delete"];
         if(adminPaths.includes(url.pathname)){
           const token=req.headers.get("x-admin-token")||"";
           const hour=Math.floor(Date.now()/3600000);
@@ -456,7 +469,28 @@ export class Directory extends DurableObject {
         return json({ok:true});
       }
       if(req.method==="GET" && url.pathname==="/admin-users"){
-        return json({ok:true,users:this.ctx.storage.sql.exec("SELECT id,name,avatar,bio,created_at,last_seen FROM users ORDER BY last_seen DESC, name COLLATE NOCASE LIMIT 500").toArray()});
+        return json({ok:true,users:this.ctx.storage.sql.exec("SELECT id,name,avatar,bio,created_at,last_seen,status FROM users ORDER BY last_seen DESC, name COLLATE NOCASE LIMIT 500").toArray()});
+      }
+      if(req.method==="POST" && url.pathname==="/admin-user-toggle"){
+        const b=await req.json(); const id=String(b.id||"");
+        const u=this.user(id); if(!u)return json({ok:false,error:"کاربر پیدا نشد"},404);
+        const status=u.status==='blocked'?'active':'blocked';
+        this.ctx.storage.sql.exec("UPDATE users SET status=? WHERE id=?",status,id);
+        this.ctx.storage.sql.exec("INSERT INTO admin_actions(id,action,target_user,details,created_at) VALUES(?,?,?,?,?)",uid(),"user_status",id,status,Date.now());
+        return json({ok:true,status});
+      }
+      if(req.method==="POST" && url.pathname==="/admin-user-delete"){
+        const b=await req.json(); const id=String(b.id||"");
+        const u=this.user(id); if(!u)return json({ok:false,error:"کاربر پیدا نشد"},404);
+        this.ctx.storage.sql.exec("DELETE FROM group_members WHERE user_id=?",id);
+        this.ctx.storage.sql.exec("DELETE FROM groups WHERE creator_id=?",id);
+        this.ctx.storage.sql.exec("DELETE FROM conversations WHERE user_a=? OR user_b=?",id,id);
+        this.ctx.storage.sql.exec("DELETE FROM saved_messages WHERE user_id=?",id);
+        this.ctx.storage.sql.exec("DELETE FROM reports WHERE user_id=? OR target_user=?",id,id);
+        this.ctx.storage.sql.exec("DELETE FROM global_message_index WHERE sender_id=? OR receiver_id=?",id,id);
+        this.ctx.storage.sql.exec("DELETE FROM users WHERE id=?",id);
+        this.ctx.storage.sql.exec("INSERT INTO admin_actions(id,action,target_user,details,created_at) VALUES(?,?,?,?,?)",uid(),"user_delete",id,u.name,Date.now());
+        return json({ok:true});
       }
       if(req.method==="GET" && url.pathname==="/admin-actions"){
         return json({ok:true,actions:this.ctx.storage.sql.exec("SELECT * FROM admin_actions ORDER BY created_at DESC LIMIT 300").toArray()});
@@ -927,7 +961,10 @@ export default {
           "/api/admin-reports": "/admin-reports",
           "/api/admin-word-toggle": "/admin-word-toggle",
           "/api/admin-report-update": "/admin-report-update",
-          "/api/admin-stats": "/admin-stats"
+          "/api/admin-stats": "/admin-stats",
+          "/api/admin-user-toggle": "/admin-user-toggle",
+          "/api/admin-user-delete": "/admin-user-delete",
+          "/api/group-delete": "/group-delete"
         };
         if (map[url.pathname]) {
           return directory().fetch(new Request(new URL(map[url.pathname] + url.search, "https://internal"), req));
@@ -970,7 +1007,7 @@ export default {
           const id=url.searchParams.get("id")||"";
           return directory().fetch(new Request(new URL("/groups?id="+encodeURIComponent(id),"https://internal"),req));
         }
-        if (["/api/group-create","/api/group-add","/api/group-promote","/api/group-mute"].includes(url.pathname)) {
+        if (["/api/group-create","/api/group-add","/api/group-promote","/api/group-mute","/api/group-delete"].includes(url.pathname)) {
           return directory().fetch(new Request(new URL(url.pathname.replace("/api",""),"https://internal"),req));
         }
         if (url.pathname === "/api/group") {
